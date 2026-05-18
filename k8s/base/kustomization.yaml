@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - aegis-core-gateway
+  - aegis-core-engine
+  - aegis-core-policies
+
+# `labels` (not the legacy `commonLabels`) with includeSelectors:false —
+# adds the label to resource metadata only, NOT to Rollout/Service
+# selectors (selectors are immutable after creation; polluting them with
+# a managed-by label would block future updates).
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false
