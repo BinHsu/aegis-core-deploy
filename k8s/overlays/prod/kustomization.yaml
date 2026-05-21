@@ -2,7 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 # Prod overlay — what ArgoCD's Application CR points at
 # (k8s/overlays/prod). ArgoCD renders this kustomization and syncs
-# the result into the `aegis` namespace.
+# the result into the `aegis-core` namespace.
 resources:
   - ../../base
 # Image — single ECR repo, tag-prefix model (ldz #79).

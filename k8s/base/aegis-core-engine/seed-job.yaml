@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: aegis-core-engine-seed
-  namespace: aegis
+  namespace: aegis-core
   labels:
     app.kubernetes.io/name: aegis-core-engine-seed
     app.kubernetes.io/part-of: aegis-core

@@ -2,7 +2,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: aegis-core-gateway
-  namespace: aegis
+  namespace: aegis-core
   labels:
     app.kubernetes.io/name: aegis-core-gateway
     app.kubernetes.io/part-of: aegis-core

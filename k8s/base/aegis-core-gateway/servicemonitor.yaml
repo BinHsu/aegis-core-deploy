@@ -2,7 +2,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: aegis-core-gateway
-  namespace: aegis
+  namespace: aegis-core
   labels:
     app.kubernetes.io/name: aegis-core-gateway
     app.kubernetes.io/part-of: aegis-core
@@ -15,7 +15,7 @@ spec:
     matchLabels:
       app.kubernetes.io/name: aegis-core-gateway
   namespaceSelector:
-    matchNames: [aegis]
+    matchNames: [aegis-core]
   endpoints:
     # Named port reference (not literal `:8081`) so the Service
     # contract stays swap-resistant if the convention ever shifts

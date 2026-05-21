@@ -27,7 +27,7 @@ k8s/
 
 **ArgoCD** — owned by the `aegis-platform` tier — points its
 Application CR at `k8s/overlays/prod`, renders the kustomization, and
-syncs the result into the `aegis` namespace.
+syncs the result into the `aegis-core` namespace.
 
 ## Image tags
 

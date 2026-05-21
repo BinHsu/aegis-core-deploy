@@ -2,7 +2,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: aegis-core-engine
-  namespace: aegis
+  namespace: aegis-core
   labels:
     app.kubernetes.io/name: aegis-core-engine
     app.kubernetes.io/part-of: aegis-core
@@ -11,7 +11,7 @@ spec:
     matchLabels:
       app.kubernetes.io/name: aegis-core-engine
   namespaceSelector:
-    matchNames: [aegis]
+    matchNames: [aegis-core]
   endpoints:
     # Same named-port + interval convention as the gateway —
     # single-pattern ServiceMonitor template per ldz #46 §"Q3"

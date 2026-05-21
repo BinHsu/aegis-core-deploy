@@ -2,7 +2,7 @@ apiVersion: argoproj.io/v1alpha1
 kind: Rollout
 metadata:
   name: aegis-core-gateway
-  namespace: aegis
+  namespace: aegis-core
   labels:
     app.kubernetes.io/name: aegis-core-gateway
     app.kubernetes.io/part-of: aegis-core
@@ -90,7 +90,7 @@ spec:
             - name: AEGIS_ENGINE_ADDR
               # Headless Service DNS — gRPC client-side round_robin
               # resolver walks all backing pod IPs (ADR-0017).
-              value: "aegis-core-engine.aegis.svc.cluster.local:50051"
+              value: "aegis-core-engine.aegis-core.svc.cluster.local:50051"
             - name: AEGIS_LOG_LEVEL
               value: "info"
             # Downward API → trace-aware slog handler (Phase 4d
