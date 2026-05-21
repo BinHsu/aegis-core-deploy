@@ -74,7 +74,7 @@ spec:
           # the kustomize overlay (`k8s/overlays/prod/kustomization.yaml`
           # `images:` block) via `newName`, per ADR-0036. CI rewrites
           # only the tag (`staging-<git_sha>`) in this base manifest.
-          image: aegis-core:staging-db14d67559d079d48633dc3a536666eba080ac05
+          image: aegis-core:staging-6995fab1f037c632e919e5e321a6f0e26dbacfce
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
