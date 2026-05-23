@@ -5,6 +5,7 @@ resources:
   - aegis-core-gateway
   - aegis-core-engine
   - aegis-core-policies
+  - iam
 
 # `labels` (not the legacy `commonLabels`) with includeSelectors:false —
 # adds the label to resource metadata only, NOT to Rollout/Service
