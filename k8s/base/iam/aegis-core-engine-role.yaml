@@ -14,10 +14,17 @@
 # and no cluster-specific identifier.
 #
 # ⚠️ implemented, E2E PENDING platform bootstrap:
-#   - OIDC_PROVIDER_ARN / OIDC_PROVIDER are platform-injected placeholders;
-#     ACK will not accept them verbatim. Wiring the injection (the platform
-#     resolving this cluster's OIDC provider into the trust doc) is a
-#     bootstrap-time task — flagged for review.
+#   - OIDC_PROVIDER_ARN / OIDC_PROVIDER are placeholders for THIS cluster's OIDC
+#     provider (account- + cluster-specific), resolved by the platform at
+#     bootstrap. This is deliberately NOT done via the ApplicationSet's
+#     sync-time injection (unlike the SA role-arn / ECR registry / cert-arn):
+#     the OIDC ARN is embedded INSIDE the assumeRolePolicyDocument JSON string,
+#     and kustomize cannot token-replace inside a string. The only way to inject
+#     it via kustomize would be to overwrite the WHOLE trust doc — which would
+#     also overwrite the workload-owned trust SUBJECT below, gutting the Kyverno
+#     enforcement (#2) that guards exactly that subject. So the subject stays
+#     workload-declared + Kyverno-enforced HERE, and the OIDC binding is a
+#     platform bootstrap step (the platform knows the cluster's OIDC provider).
 #   - Permission policies are an intentional SKELETON (none yet). They are
 #     added when the engine gains concrete AWS API surface (e.g. S3 model
 #     streaming per aegis-core ADR-0026). The role provisioning + trust subject
