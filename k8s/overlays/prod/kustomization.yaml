@@ -8,28 +8,17 @@ resources:
 # Image — single ECR repo, tag-prefix model (ldz #79).
 #
 # All three image-bearing manifests (gateway rollout, engine rollout,
-# engine seed-job) share ONE ECR repository, `aegis-core`. They are
-# distinguished only by tag PREFIX:
+# engine seed-job) share ONE ECR repository, `aegis-core`, distinguished only
+# by tag PREFIX (gateway → `staging-<sha>`, engine + seed →
+# `engine-staging-<sha>`). Those tags stay in the base rollout / seed-job
+# manifests, where aegis-core CI rewrites them per-manifest (ADR-0032).
 #
-#   - gateway          → tag `staging-<git_sha>`
-#   - engine + seed    → tag `engine-staging-<git_sha>`
+# `newName` (the ECR registry URL — it embeds the AWS account ID) is GONE.
+# The platform ApplicationSet now injects it via kustomize.images at sync time
+# (aegis-platform ADR-07 / account-ID hide) — newName only, applied to every
+# `aegis-core:*` image regardless of tag, exactly as this block used to. So the
+# account ID never lands in this public repo; the base manifests carry only the
+# bare `aegis-core:<tag>` reference.
 #
-# `newName` below de-hardcodes the registry path: it lifts the full
-# ECR URL (with the AWS account ID) out of the three base manifests
-# and into this one overlay location. The base manifests now carry
-# only the bare `aegis-core:<tag>` reference.
-#
-# Why NO `newTag` here: kustomize can carry only ONE `newTag` per
-# `name` match key, but gateway and engine need DIFFERENT tag
-# prefixes off the same `name: aegis-core`. So the tags stay in the
-# base rollout / seed-job manifests, where aegis-core CI rewrites
-# them per-manifest (ADR-0032 `bump-image-tag` job). `newName` has
-# no such single-value limit — it applies the same registry path to
-# every `aegis-core:*` image regardless of tag.
-#
-# The account ID embedded in `newName` is an accepted, documented
-# leak — same posture as the sibling aegis-greeter_deploy repo's
-# committed image manifest.
-images:
-  - name: aegis-core
-    newName: 251774439261.dkr.ecr.eu-central-1.amazonaws.com/aegis-core
+# ⚠️ implemented, E2E PENDING platform bootstrap — confirm the injected newName
+# resolves all three images at first sync.

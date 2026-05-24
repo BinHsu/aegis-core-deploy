@@ -1,0 +1,68 @@
+# Workload-owned IAM, declared as an ACK CRD (aegis-platform ADR-07).
+#
+# The engine's IAM role used to be a DANGLING reference: the engine SA carried
+# a role-arn annotation pointing at `aegis-staging-aegis-engine` in the
+# landing-zone account, but that role was NEVER provisioned (a phantom). ADR-07
+# moves workload IAM out of the fabric tier: this repo now DECLARES the role as
+# an ACK `Role` CRD, and the platform's ACK IAM controller PROVISIONS it.
+#
+# Ownership split (ADR-07): the trust SUBJECT below
+# (system:serviceaccount:aegis-core:aegis-core-engine) is workload-owned and is
+# enforced by the platform's Kyverno policy — an ACK Role may only trust a SA
+# in its OWN namespace. The OIDC PROVIDER binding (account + cluster identity)
+# is platform-injected at bootstrap, so this public repo commits no account ID
+# and no cluster-specific identifier.
+#
+# ⚠️ implemented, E2E PENDING platform bootstrap:
+#   - OIDC_PROVIDER_ARN / OIDC_PROVIDER are placeholders for THIS cluster's OIDC
+#     provider (account- + cluster-specific), resolved by the platform at
+#     bootstrap. This is deliberately NOT done via the ApplicationSet's
+#     sync-time injection (unlike the SA role-arn / ECR registry / cert-arn):
+#     the OIDC ARN is embedded INSIDE the assumeRolePolicyDocument JSON string,
+#     and kustomize cannot token-replace inside a string. The only way to inject
+#     it via kustomize would be to overwrite the WHOLE trust doc — which would
+#     also overwrite the workload-owned trust SUBJECT below, gutting the Kyverno
+#     enforcement (#2) that guards exactly that subject. So the subject stays
+#     workload-declared + Kyverno-enforced HERE, and the OIDC binding is a
+#     platform bootstrap step (the platform knows the cluster's OIDC provider).
+#   - Permission policies are an intentional SKELETON (none yet). They are
+#     added when the engine gains concrete AWS API surface (e.g. S3 model
+#     streaming per aegis-core ADR-0026). The role provisioning + trust subject
+#     are what issue #6's gate validates ("ACK provisions the engine IAM role
+#     from the CRD; role exists + correct trust subject").
+apiVersion: iam.services.k8s.aws/v1alpha1
+kind: Role
+metadata:
+  name: aegis-core-engine
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: aegis-core-engine
+    app.kubernetes.io/part-of: aegis-core
+  annotations:
+    aegis.binhsu.org/status: "implemented, E2E PENDING platform bootstrap"
+spec:
+  name: aegis-core-engine
+  # The /aegis-workload/ path is the boundary the ACK controller's own IAM
+  # policy is scoped to (aegis-platform irsa-ack-iam.tf) — ACK can manage roles
+  # ONLY under this path, never platform/CI/break-glass identities.
+  path: /aegis-workload/
+  description: "IRSA role for the aegis-core engine ServiceAccount. Workload-declared (ADR-07). Trust subject Kyverno-enforced; OIDC binding platform-injected. E2E PENDING bootstrap."
+  assumeRolePolicyDocument: |
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "Federated": "OIDC_PROVIDER_ARN"
+          },
+          "Action": "sts:AssumeRoleWithWebIdentity",
+          "Condition": {
+            "StringEquals": {
+              "OIDC_PROVIDER:sub": "system:serviceaccount:aegis-core:aegis-core-engine",
+              "OIDC_PROVIDER:aud": "sts.amazonaws.com"
+            }
+          }
+        }
+      ]
+    }
