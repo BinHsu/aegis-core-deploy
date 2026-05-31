@@ -1,7 +1,8 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Workload-scoped IAM declared as ACK CRDs (aegis-platform ADR-07). The
-# platform's ACK IAM controller reconciles these into real AWS IAM.
+# Workload identity declared via the platform's WorkloadIdentity XR
+# (ADR-09 platform-as-product XRD). The platform's Crossplane Composition
+# renders the underlying ACK Role; ACK reconciles it into AWS IAM.
 resources:
-  - aegis-core-engine-role.yaml
+  - aegis-core-engine-identity.yaml
