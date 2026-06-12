@@ -8,6 +8,13 @@ metadata:
     app.kubernetes.io/part-of: aegis-core
     app.kubernetes.io/component: rag-seed
   annotations:
+    # Standalone-build defaults for the platform-injected annotations.
+    # Mirrors the pattern on the engine Rollout: ArgoCD's commonAnnotations
+    # transformer propagates the injected annotation to ALL resources
+    # including this Job, so the replacements block in the overlays can
+    # source from this Job's own metadata.annotations — same channel as
+    # the Rollout. The base literal here is the standalone-build fallback.
+    aegis.binhsu.org/ecr-repository: aegis-core
     # ArgoCD hook semantics: run AFTER the Rollout (and its Service /
     # NetworkPolicy / ServiceAccount) have reconciled, so the Secret
     # the Job consumes is materialized before it tries to mount.
