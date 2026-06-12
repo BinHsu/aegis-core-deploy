@@ -28,10 +28,9 @@ name: Validate
 #      and the ServiceAccount annotation is cosmetic for local rendering.
 #
 # kustomize v5.8.1 linux/amd64 is downloaded once, sha256-verified, and
-# reused across both overlay loops. `kubectl kustomize` (shipped on the
-# ubuntu runner) is used for the standalone render; the standalone-
-# installed kustomize binary is used for the injection simulation
-# (edit + build).
+# reused across both overlay loops. The pinned kustomize binary is used
+# for both the standalone render and the injection simulation so that
+# both paths run the identical renderer version.
 
 on:
   pull_request:
@@ -82,12 +81,12 @@ jobs:
           #   - aegis-core-engine-seed Job, container `seed`     (tag: engine-staging-<sha>)
           for overlay in staging prod; do
             echo "=== k8s/overlays/${overlay} (standalone) ==="
-            kubectl kustomize "k8s/overlays/${overlay}" > "rendered-${overlay}.yaml"
+            kustomize build "k8s/overlays/${overlay}" > "rendered-${overlay}.yaml"
             image_lines="$(grep -E '^\s+image: ' "rendered-${overlay}.yaml")"
             echo "${image_lines}"
             # Every image line must match aegis-core:<tag> — no bare name,
             # no accidental registry leakage into the public base manifests.
-            bad="$(echo "${image_lines}" | grep -Ev 'image: aegis-core:' || true)"
+            bad="$(echo "${image_lines}" | grep -Ev '^[[:space:]]*image: aegis-core:[^[:space:]]+$' || true)"
             [ -z "${bad}" ] \
               || { echo "::error::${overlay}: image line(s) do not match aegis-core:<tag> (ImagePullBackOff regression? replacements wiring missing?):"; echo "${bad}"; exit 1; }
             echo "--- guard: OK ---"
@@ -127,7 +126,7 @@ jobs:
             # Every image line must carry the ECR registry prefix before the tag.
             # A bare `aegis-core:<tag>` (without registry host) would
             # ImagePullBackOff in any ECR-backed cluster.
-            bad="$(echo "${image_lines}" | grep -Fv "image: ${ECR_REPO}:" || true)"
+            bad="$(echo "${image_lines}" | grep -Ev "^[[:space:]]*image: ${ECR_REPO}:[^[:space:]]+\$" || true)"
             [ -z "${bad}" ] \
               || { echo "::error::${overlay}: injected render has image line(s) without ECR prefix ${ECR_REPO}:"; echo "${bad}"; exit 1; }
             echo "--- injection guard: OK ---"

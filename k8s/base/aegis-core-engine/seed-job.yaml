@@ -15,6 +15,7 @@ metadata:
     # source from this Job's own metadata.annotations — same channel as
     # the Rollout. The base literal here is the standalone-build fallback.
     aegis.binhsu.org/ecr-repository: aegis-core
+    aegis.binhsu.org/region: local
     # ArgoCD hook semantics: run AFTER the Rollout (and its Service /
     # NetworkPolicy / ServiceAccount) have reconciled, so the Secret
     # the Job consumes is materialized before it tries to mount.
