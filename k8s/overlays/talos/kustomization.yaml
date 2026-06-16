@@ -39,27 +39,29 @@ patches:
     target:
       kind: Rollout
       name: aegis-core-engine
-  # --- digest pins (locally-built images pushed to the in-cluster registry).
-  # Placeholders here; WS1-5 sets the real digests from the local Bazel build.
-  # seed Job == engine digest (ADR-14).
+  # --- digest pins. Real digests from the WS2-1 CI build on the arm64 runner
+  # (aegis-core release-onprem-image.yml run 27621629362, tag onprem-d919515).
+  # The digest identifies image content, so it holds whether served from GHCR
+  # or the in-cluster registry the platform injects in front of it (crane copy
+  # preserves the digest). seed Job == engine digest (ADR-14).
   - patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        value: aegis-core@sha256:e7d514503775729328e56be3eeea989535e2f666e4299f13374d7c293fb8ba5b
     target:
       kind: Rollout
       name: aegis-core-gateway
   - patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        value: aegis-core@sha256:4c854ece6e5ce1ecfed630307e1da9c827b8ea321c86c34a7eec56a552177a86
     target:
       kind: Rollout
       name: aegis-core-engine
   - patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        value: aegis-core@sha256:4c854ece6e5ce1ecfed630307e1da9c827b8ea321c86c34a7eec56a552177a86
     target:
       kind: Job
       name: aegis-core-engine-seed
