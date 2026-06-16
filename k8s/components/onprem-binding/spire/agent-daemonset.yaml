@@ -33,49 +33,24 @@ spec:
         - key: "node-role.kubernetes.io/control-plane"
           operator: "Exists"
           effect: "NoSchedule"
-      # automountServiceAccountToken=false — we use a projected token instead
-      # (audience-scoped to "spire-server", matches server's expected audience).
-      automountServiceAccountToken: false
+      # automountServiceAccountToken=true: the WorkloadAttestor "k8s" calls the
+      # kubelet API and authenticates with the DEFAULT SA token at
+      # /var/run/secrets/kubernetes.io/serviceaccount/token (it crashed without
+      # it). The SEPARATE projected token below (audience "spire-server") is for
+      # the k8s_psat NODE attestor — both coexist at different paths.
+      automountServiceAccountToken: true
       securityContext:
-        # runAsNonRoot: true would be preferred, but hostPID+hostNetwork on
-        # some kernels requires uid 0 for /proc traversal. SPIRE agent v1.11
-        # can run as non-root for the Workload API; the WorkloadAttestor "k8s"
-        # plugin uses the kubelet HTTP API (not /proc) when node_name_env is
-        # set, so we CAN run non-root here.
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
+        # Root: the agent binds the Workload API socket on a root-owned hostPath
+        # dir and reads /proc of other pods (hostPID) for workload attestation.
+        # nonroot failed with EACCES on the socket bind (verified live). The ns
+        # is PSA privileged precisely for this.
+        runAsUser: 0
+        runAsGroup: 0
         seccompProfile:
           type: RuntimeDefault
-      initContainers:
-        # Wait for the SPIRE Server gRPC port to be reachable before starting
-        # the agent. Without this the agent may crash-loop during initial
-        # cluster bootstrap when the server pod is not yet ready.
-        - name: wait-for-server
-          # Reuse the agent image — it carries /opt/spire/bin/spire-agent which
-          # can check connectivity. We use a simple shell loop instead of
-          # wait-for-it to avoid pulling an extra image.
-          image: ghcr.io/spiffe/spire-agent@sha256:7561ee91bfe07812f335d5b9e564bbb2ab77ef601558898a23177f692db15fc1
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              until nc -z spire-server.spire-system.svc.cluster.local 8081 2>/dev/null; do
-                echo "waiting for spire-server:8081..."; sleep 2
-              done
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 1000
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          resources:
-            requests:
-              cpu: "10m"
-              memory: "16Mi"
-            limits:
-              cpu: "50m"
-              memory: "32Mi"
+      # No wait-for-server init container: the spire-agent image is distroless
+      # (no /bin/sh, no nc), and the agent retries the server connection
+      # natively, so an init wait is both impossible-as-shell and unnecessary.
       containers:
         - name: spire-agent
           # Pinned digest (v1.11.2, linux/arm64-capable multi-arch index).
@@ -92,12 +67,18 @@ spec:
             - name: health
               containerPort: 8080
               protocol: TCP
+          # The agent MUST run as root: it binds the Workload API socket on a
+          # hostPath dir (root-owned) and reads /proc of other pods (hostPID)
+          # for k8s workload attestation. nonroot failed with EACCES on the
+          # socket bind. This is why the ns is PSA privileged. rootfs stays
+          # read-only; writable state lives on the spire-agent-data emptyDir.
           securityContext:
-            runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
+            runAsUser: 0
+            runAsGroup: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
             capabilities:
               drop: ["ALL"]
           livenessProbe:
@@ -133,7 +114,13 @@ spec:
             - name: spire-token
               mountPath: /var/run/secrets/tokens
               readOnly: true
+            # Writable data_dir (rootfs is read-only). The agent writes
+            # agent-data.json (SVID/bundle cache) here.
+            - name: spire-agent-data
+              mountPath: /run/spire/data
       volumes:
+        - name: spire-agent-data
+          emptyDir: {}
         - name: spire-config
           configMap:
             name: spire-agent

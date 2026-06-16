@@ -75,8 +75,12 @@ data:
       # Source: https://github.com/spiffe/spire/blob/main/doc/plugin_server_notifier_k8sbundle.md
       Notifier "k8sbundle" {
         plugin_data {
-          # namespace defaults to the server's own namespace (spire-system)
-          # config_map defaults to "spire-bundle"
+          # NOTE: k8sbundle defaults namespace to "spire" and config_map to
+          # "spire-bundle" — NOT the server's own namespace. The default bit us:
+          # it tried ns "spire" and RBAC (Role lives in spire-system) forbade it,
+          # crashlooping the server. Set both explicitly to match where we run.
+          namespace  = "spire-system"
+          config_map = "spire-bundle"
         }
       }
     }

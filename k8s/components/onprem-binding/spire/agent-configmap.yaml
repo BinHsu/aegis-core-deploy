@@ -14,7 +14,8 @@ data:
     # Source: https://github.com/spiffe/spire/blob/main/conf/agent/agent_full.conf
 
     agent {
-      data_dir    = "/run/spire"
+      # /run/spire/data is a writable emptyDir (rootfs is read-only).
+      data_dir    = "/run/spire/data"
       log_level   = "INFO"
       server_address = "spire-server.spire-system.svc.cluster.local"
       server_port    = "8081"
