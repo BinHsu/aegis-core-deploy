@@ -39,6 +39,7 @@ resources:
   - spire/agent-rbac.yaml
   - spire/agent-configmap.yaml
   - spire/agent-daemonset.yaml
+  - spire/csi-driver.yaml
   - spire/registration-job.yaml
   - spire/minio-policy-configmap.yaml
 
@@ -81,7 +82,7 @@ patches:
                 set -eu
                 # Wait for the SPIRE agent socket to appear (agent DaemonSet may
                 # still be initialising on first boot).
-                until [ -S /run/spire/agent-sockets/spire-agent.sock ]; do
+                until [ -S /spiffe-workload-api/spire-agent.sock ]; do
                   echo "waiting for SPIRE agent socket..."; sleep 2
                 done
                 # Fetch a JWT-SVID with audience=minio.
@@ -90,7 +91,7 @@ patches:
                 # Source: spire-agent CLI: `spire-agent api fetch jwt --help`
                 /opt/spire/bin/spire-agent api fetch jwt \
                   -audience minio \
-                  -socketPath /run/spire/agent-sockets/spire-agent.sock \
+                  -socketPath /spiffe-workload-api/spire-agent.sock \
                   | grep -oP '(?<=token: ).*' \
                   > /run/spire/svid/jwt
                 echo "JWT-SVID written"
@@ -110,8 +111,8 @@ patches:
                 cpu: "100m"
                 memory: "64Mi"
             volumeMounts:
-              - name: spire-agent-socket
-                mountPath: /run/spire/agent-sockets
+              - name: spiffe-workload-api
+                mountPath: /spiffe-workload-api
                 readOnly: true
               - name: spire-svid
                 mountPath: /run/spire/svid
@@ -251,10 +252,10 @@ patches:
       - op: add
         path: /spec/template/spec/volumes/-
         value:
-          name: spire-agent-socket
-          hostPath:
-            path: /run/spire/agent-sockets
-            type: DirectoryOrCreate
+          name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true
       - op: add
         path: /spec/template/spec/volumes/-
         value:
@@ -281,12 +282,12 @@ patches:
             args:
               - |
                 set -eu
-                until [ -S /run/spire/agent-sockets/spire-agent.sock ]; do
+                until [ -S /spiffe-workload-api/spire-agent.sock ]; do
                   echo "waiting for SPIRE agent socket..."; sleep 2
                 done
                 /opt/spire/bin/spire-agent api fetch jwt \
                   -audience minio \
-                  -socketPath /run/spire/agent-sockets/spire-agent.sock \
+                  -socketPath /spiffe-workload-api/spire-agent.sock \
                   | grep -oP '(?<=token: ).*' \
                   > /run/spire/svid/jwt
                 echo "JWT-SVID written"
@@ -306,8 +307,8 @@ patches:
                 cpu: "100m"
                 memory: "64Mi"
             volumeMounts:
-              - name: spire-agent-socket
-                mountPath: /run/spire/agent-sockets
+              - name: spiffe-workload-api
+                mountPath: /spiffe-workload-api
                 readOnly: true
               - name: spire-svid
                 mountPath: /run/spire/svid
@@ -381,10 +382,10 @@ patches:
       - op: add
         path: /spec/template/spec/volumes/-
         value:
-          name: spire-agent-socket
-          hostPath:
-            path: /run/spire/agent-sockets
-            type: DirectoryOrCreate
+          name: spiffe-workload-api
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true
       - op: add
         path: /spec/template/spec/volumes/-
         value:
