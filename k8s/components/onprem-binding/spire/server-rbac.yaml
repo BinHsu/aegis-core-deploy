@@ -1,0 +1,75 @@
+# SPIRE Server RBAC — three grants:
+# 1. ClusterRole: create TokenReviews (k8s_psat node attestor) + read pods/nodes
+#    Source: https://github.com/spiffe/spire-tutorials/blob/main/k8s/quickstart/server-cluster-role.yaml
+# 2. ClusterRoleBinding: binds (1) to the spire-server ServiceAccount
+# 3. Role (namespace-scoped): patch/get/list ConfigMaps in spire-system
+#    Used by the k8sbundle Notifier to publish the trust bundle to spire-bundle ConfigMap
+#    Source: https://github.com/spiffe/spire-tutorials/blob/main/k8s/quickstart/server-cluster-role.yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-server
+  labels:
+    app.kubernetes.io/name: spire-server
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+rules:
+  # k8s_psat NodeAttestor: verify projected service account tokens
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  # k8s_psat NodeAttestor: resolve pod/node metadata during attestation
+  - apiGroups: [""]
+    resources: ["pods", "nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-server
+  labels:
+    app.kubernetes.io/name: spire-server
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-server
+subjects:
+  - kind: ServiceAccount
+    name: spire-server
+    namespace: spire-system
+---
+# Namespace-scoped role for k8sbundle Notifier to update spire-bundle ConfigMap
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spire-server-configmap
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-server
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["patch", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spire-server-configmap
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-server
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spire-server-configmap
+subjects:
+  - kind: ServiceAccount
+    name: spire-server
+    namespace: spire-system

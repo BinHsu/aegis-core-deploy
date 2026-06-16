@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-spire-policy
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/part-of: aegis-core
+    app.kubernetes.io/managed-by: argocd
+data:
+  # IAM policy granting read-only access to the aegis-models bucket.
+  # This policy is referenced by MINIO_IDENTITY_OPENID_ROLE_POLICY.
+  # When the engine presents a JWT-SVID and calls AssumeRoleWithWebIdentity,
+  # MinIO issues temp creds scoped to this policy.
+  # Source: https://min.io/docs/minio/linux/reference/minio-server/settings/iam/openid.html
+  aegis-models-readonly.json: |
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "s3:GetObject",
+            "s3:ListBucket"
+          ],
+          "Resource": [
+            "arn:aws:s3:::aegis-models",
+            "arn:aws:s3:::aegis-models/*"
+          ]
+        }
+      ]
+    }
+  # Bootstrap script run by the minio-bootstrap Job to create the policy.
+  # mc admin policy create  <alias> <policy-name> <policy-file>
+  create-policy.sh: |
+    #!/bin/sh
+    set -eu
+    export MC_CONFIG_DIR=/tmp/mc
+    until mc alias set obj http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+      echo "waiting for MinIO..."; sleep 2
+    done
+    mc admin policy create obj aegis-models-readonly /policy/aegis-models-readonly.json
+    echo "policy aegis-models-readonly created"

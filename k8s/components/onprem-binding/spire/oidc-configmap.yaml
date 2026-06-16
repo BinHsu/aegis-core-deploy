@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-oidc
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-oidc
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+data:
+  oidc-discovery-provider.conf: |
+    # OIDC Discovery Provider configuration.
+    # Source: https://github.com/spiffe/spire/blob/main/support/oidc-discovery-provider/README.md
+    # Source: https://github.com/spiffe/spire/blob/main/release/posix/spire-extras/conf/oidc-discovery-provider/oidc-discovery-provider.conf
+
+    log_level = "INFO"
+
+    # domains: the hostname(s) this provider is authoritative for.
+    # Must match the host in jwt_issuer (without scheme). MinIO resolves
+    # spire-oidc.spire-system.svc.cluster.local when fetching the discovery doc.
+    domains = ["spire-oidc.spire-system.svc.cluster.local"]
+
+    # LOCAL-DEV shortcut: plain HTTP on :8008 (insecure_addr).
+    # allow_insecure_scheme lets the discovery document list http:// URLs.
+    # On a real deployment set this to https:// with a serving_cert_file or
+    # ACME. MinIO's MINIO_IDENTITY_OPENID_CONFIG_URL must use the same scheme.
+    # Source: README.md §"allow_insecure_scheme"
+    insecure_addr        = "0.0.0.0:8008"
+    allow_insecure_scheme = true
+
+    # server_api: connect to SPIRE Server via its admin socket shared on the
+    # server-sockets volume. The oidc-discovery-provider runs as a sidecar in
+    # the same pod as spire-server, so the hostPath is available locally.
+    # Source: README.md §"server_api"
+    server_api {
+      address      = "unix:///run/spire/server-sockets/api.sock"
+      poll_interval = "10s"
+    }
+
+    health_checks {
+      bind_port  = "8009"
+      ready_path = "/ready"
+      live_path  = "/live"
+    }

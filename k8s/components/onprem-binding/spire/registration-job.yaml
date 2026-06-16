@@ -1,0 +1,161 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-registration
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-registration
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+automountServiceAccountToken: false
+---
+# The registration Job needs to exec into the spire-server pod to call
+# /opt/spire/bin/spire-server entry create via the admin socket.
+# We use `kubectl exec` from inside the cluster — so the Job's SA needs
+# permission to create pod/exec in spire-system.
+# Alternative: mount the server socket directly and call the gRPC API.
+# We chose exec because it avoids copying the spire-server binary or
+# managing gRPC credentials — acceptable at local-dev scale.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spire-registration
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-registration
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spire-registration
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-registration
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spire-registration
+subjects:
+  - kind: ServiceAccount
+    name: spire-registration
+    namespace: spire-system
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spire-registration
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-registration
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    # ArgoCD PostSync hook: runs after the SPIRE Server StatefulSet and Agent
+    # DaemonSet have been reconciled, ensuring spire-server-0 is Running before
+    # this Job tries to exec into it.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spire-registration
+        app.kubernetes.io/part-of: spire
+    spec:
+      serviceAccountName: spire-registration
+      restartPolicy: OnFailure
+      # automountServiceAccountToken: true — kubectl exec needs the SA token
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: register
+          # Use the spire-agent image — it ships /opt/spire/bin/spire-server
+          # (the CLI) and kubectl is available via the kubectl binary we
+          # install from the bitnami/kubectl image below. We use the agent
+          # image here only as a shell carrier; kubectl is the actual tool.
+          # SIMPLER ALTERNATIVE: use bitnami/kubectl directly and exec into
+          # spire-server-0 via the Kubernetes API.
+          image: ghcr.io/spiffe/spire-agent@sha256:7561ee91bfe07812f335d5b9e564bbb2ab77ef601558898a23177f692db15fc1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+
+              # Wait for the spire-server-0 pod to be ready before execing.
+              # The pod/exec permission is on the spire-registration Role above.
+              # We use the in-cluster KUBERNETES_SERVICE_HOST/PORT + SA token
+              # via kubectl (mounted from the projected token below).
+              KUBECTL="kubectl --server=https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS} \
+                       --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+                       --token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+
+              echo "waiting for spire-server-0 to be Running..."
+              until $KUBECTL get pod spire-server-0 -n spire-system \
+                    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running; do
+                sleep 3
+              done
+
+              # Register the node entry first (parent for all workload entries).
+              # spiffeID = spiffe://aegis.local/ns/spire-system/sa/spire-agent
+              # This is the PSAT-attested node identity the agent presents.
+              # Source: https://spiffe.io/docs/latest/try/getting-started-k8s/
+              echo "creating node entry..."
+              $KUBECTL exec spire-server-0 -n spire-system -- \
+                /opt/spire/bin/spire-server entry create \
+                  -spiffeID spiffe://aegis.local/ns/spire-system/sa/spire-agent \
+                  -selector k8s_psat:cluster:aegis-local \
+                  -selector k8s_psat:agent_ns:spire-system \
+                  -selector k8s_psat:agent_sa:spire-agent \
+                  -node \
+                  -socketPath /run/spire/server-sockets/api.sock \
+              || echo "node entry may already exist, continuing"
+
+              # Register the workload entry: the aegis-core-engine pod.
+              # Parent = the node SPIFFE ID registered above.
+              # Selectors: namespace + ServiceAccount (k8s WorkloadAttestor).
+              # The engine init-container requests audience=minio — that audience
+              # must be listed in -jwtSVIDTTL and is allowed by default.
+              # Source: https://spiffe.io/docs/latest/try/getting-started-k8s/
+              echo "creating workload entry for aegis-core-engine..."
+              $KUBECTL exec spire-server-0 -n spire-system -- \
+                /opt/spire/bin/spire-server entry create \
+                  -spiffeID spiffe://aegis.local/ns/aegis-core/sa/aegis-core-engine \
+                  -parentID spiffe://aegis.local/ns/spire-system/sa/spire-agent \
+                  -selector k8s:ns:aegis-core \
+                  -selector k8s:sa:aegis-core-engine \
+                  -socketPath /run/spire/server-sockets/api.sock \
+              || echo "workload entry may already exist, continuing"
+
+              echo "SPIRE registration complete."
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"

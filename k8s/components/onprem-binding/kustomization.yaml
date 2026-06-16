@@ -5,41 +5,61 @@ kind: Component
 # ADR-17's "every target = base + its binding component; base stays neutral".
 # Included by overlays/talos only.
 #
-# WS2-2 (this component, ADR-18): the OBJECT-STORE axis. On AWS the engine's
-# /models CAS store is backed by an S3 bucket + a Mountpoint-S3 CSI mount
-# (components/aws-binding owns that binding; AWS-side delivery still deferred,
-# ldz #85). The engine has NO in-process S3 client — it reads model files from
-# a local POSIX path ($AEGIS_MODEL_PATH, CAS layout <id>/<sha256>.<ext>) and
-# verifies each against the bundled manifest at startup (FATAL on miss). So the
-# substitution lives at the model-DELIVERY layer, not an endpoint config:
-#   - MinIO (S3-compatible) holds the model objects (minio/ + bootstrap Job).
-#   - an init-container mirrors MinIO -> the engine's /models emptyDir before
-#     the engine's CAS preflight runs (the on-prem analogue of the CSI mount).
+# WS2-2 (ADR-18): the OBJECT-STORE axis. MinIO substitutes the AWS S3 model
+# bucket; an init-container mirrors it into the engine's /models CAS store.
 #
-# Later WS2 slices add their own axes here: WS2-3 SPIRE (identity, IRSA->),
-# WS2-4 Dex (gateway auth, Cognito->).
+# WS2-3 (this slice): the IDENTITY axis. SPIRE issues JWT-SVIDs to the engine
+# workload; the engine exchanges them at MinIO's STS AssumeRoleWithWebIdentity
+# for short-lived creds, replacing the static root-credential model-fetch
+# init-container (WS2-2). The MinIO Deployment is patched to trust JWT-SVIDs
+# via OIDC (MINIO_IDENTITY_OPENID_*). The engine init-container now:
+#   1. mounts the SPIRE agent Workload API socket (hostPath, read-only)
+#   2. calls `spire-agent api fetch jwt` to get a JWT-SVID (aud=minio)
+#   3. exchanges it at MinIO's STS endpoint for temp AccessKeyId/SecretAccessKey/SessionToken
+#   4. calls `mc alias set` + `mc mirror` with those temp creds
+#
+# WS2-4 Dex (gateway auth, Cognito->) is deferred to the next slice.
 resources:
+  # --- MinIO (object store) ---
   - minio/secret.yaml
   - minio/deployment.yaml
   - minio/service.yaml
   - minio/networkpolicy.yaml
   - minio/bootstrap-job.yaml
+  # --- SPIRE (identity) ---
+  - spire/namespace.yaml
+  - spire/spire-bundle-configmap.yaml
+  - spire/server-serviceaccount.yaml
+  - spire/server-rbac.yaml
+  - spire/server-configmap.yaml
+  - spire/oidc-configmap.yaml
+  - spire/server-statefulset.yaml
+  - spire/server-service.yaml
+  - spire/agent-serviceaccount.yaml
+  - spire/agent-rbac.yaml
+  - spire/agent-configmap.yaml
+  - spire/agent-daemonset.yaml
+  - spire/registration-job.yaml
+  - spire/minio-policy-configmap.yaml
 
-# Mirror the base's managed-by label onto these component resources — the base
-# `labels` transformer only reaches base resources (same render-parity reason
-# components/aws-binding re-adds it).
+# Mirror the base's managed-by label onto these component resources.
 labels:
   - pairs:
       app.kubernetes.io/managed-by: argocd
     includeSelectors: false
 
 patches:
-  # --- Engine Rollout: model-fetch init-container -------------------------
-  # Populates the /models emptyDir from MinIO before the engine container's
-  # CAS preflight runs. JSON6902 (not strategic merge) because kustomize has
-  # no openapi schema for the Rollout CRD; `add` creates the initContainers
-  # key (absent in base). Mounts the base `models` volume RW (the engine
-  # container mounts it readOnly) and `tmp` for the mc config dir.
+  # =========================================================================
+  # Engine Rollout: SPIRE-aware model-fetch init-container (WS2-3)
+  # Replaces the WS2-2 static-credential init-container with the SPIRE flow:
+  #   step 1 (fetch-jwt)  — spire-agent image fetches a JWT-SVID via the
+  #                         Workload API socket mounted from the node hostPath.
+  #   step 2 (model-fetch)— mc image exchanges the JWT at MinIO STS for temp
+  #                         creds, then mirrors the bucket into /models.
+  #
+  # JSON6902 (not strategic merge) because kustomize has no openapi schema
+  # for the Rollout CRD.
+  # =========================================================================
   - target:
       group: argoproj.io
       version: v1alpha1
@@ -49,6 +69,61 @@ patches:
       - op: add
         path: /spec/template/spec/initContainers
         value:
+          # --- step 1: fetch JWT-SVID from SPIRE agent ---
+          # Uses the spire-agent image (ships /opt/spire/bin/spire-agent).
+          # Writes the raw JWT string to the shared emptyDir /run/spire/svid.
+          # Source: https://spiffe.io/docs/latest/deploying/svids/#jwt-svids
+          - name: fetch-jwt
+            image: ghcr.io/spiffe/spire-agent@sha256:7561ee91bfe07812f335d5b9e564bbb2ab77ef601558898a23177f692db15fc1
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -eu
+                # Wait for the SPIRE agent socket to appear (agent DaemonSet may
+                # still be initialising on first boot).
+                until [ -S /run/spire/agent-sockets/spire-agent.sock ]; do
+                  echo "waiting for SPIRE agent socket..."; sleep 2
+                done
+                # Fetch a JWT-SVID with audience=minio.
+                # The audience value MUST match MINIO_IDENTITY_OPENID_CLIENT_ID
+                # so MinIO accepts the token.
+                # Source: spire-agent CLI: `spire-agent api fetch jwt --help`
+                /opt/spire/bin/spire-agent api fetch jwt \
+                  -audience minio \
+                  -socketPath /run/spire/agent-sockets/spire-agent.sock \
+                  | grep -oP '(?<=token: ).*' \
+                  > /run/spire/svid/jwt
+                echo "JWT-SVID written"
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              runAsGroup: 1000
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: "10m"
+                memory: "32Mi"
+              limits:
+                cpu: "100m"
+                memory: "64Mi"
+            volumeMounts:
+              - name: spire-agent-socket
+                mountPath: /run/spire/agent-sockets
+                readOnly: true
+              - name: spire-svid
+                mountPath: /run/spire/svid
+
+          # --- step 2: STS exchange + model mirror ---
+          # Calls MinIO's AssumeRoleWithWebIdentity with the JWT-SVID.
+          # Parses AccessKeyId/SecretAccessKey/SessionToken from the XML response
+          # using grep/sed (no jq/xmllint needed — the values are predictable).
+          # Sets up mc with temp creds (MC_SESSION_TOKEN for the session token)
+          # then mirrors the bucket.
+          # Source: https://min.io/docs/minio/linux/developers/security-token-service/AssumeRoleWithWebIdentity.html
+          # Source: https://github.com/minio/minio/blob/master/docs/sts/web-identity.md
           - name: model-fetch
             image: quay.io/minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
             command: ["/bin/sh", "-c"]
@@ -56,9 +131,77 @@ patches:
               - |
                 set -eu
                 export MC_CONFIG_DIR=/tmp/mc
-                until mc alias set obj http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
-                  echo "waiting for MinIO..."; sleep 2
-                done
+
+                JWT=$(cat /run/spire/svid/jwt)
+
+                # AssumeRoleWithWebIdentity POST to MinIO STS.
+                # MINIO_IDENTITY_OPENID_ROLE_POLICY is configured on MinIO so
+                # we must supply RoleArn. MinIO prints the Role ARN at server
+                # startup as:
+                #   "Identity configured with RoleArn: arn:aws:iam::minio:role/<fingerprint>"
+                # That ARN is stable for a given CLIENT_ID; fetch it dynamically
+                # from the server's console or bootstrap log, or hard-code after
+                # first-run. We fetch it here via mc admin info to avoid hard-coding.
+                #
+                # LOCAL-DEV shortcut: we query the Role ARN dynamically from
+                # MinIO admin API using root creds (available in Secret) before
+                # the SPIRE creds are in place. Only the STS call itself uses
+                # the JWT-SVID; admin setup uses root for the Role ARN lookup.
+                ROLE_ARN=$(mc alias set root-tmp http://minio:9000 \
+                               "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" \
+                               --api S3v4 2>/dev/null && \
+                             mc idp openid info root-tmp 2>/dev/null \
+                               | grep -oP 'RoleARN:\s*\K[^\s]+' \
+                             || echo "")
+
+                if [ -z "$ROLE_ARN" ]; then
+                  echo "ERROR: could not retrieve MinIO OIDC Role ARN." >&2
+                  echo "Ensure MinIO has started with MINIO_IDENTITY_OPENID_ROLE_POLICY set" >&2
+                  echo "and at least one successful STS exchange has occurred to mint the ARN." >&2
+                  exit 1
+                fi
+
+                echo "Role ARN: $ROLE_ARN"
+
+                # Exchange JWT-SVID for temporary STS credentials.
+                # Version=2011-06-15 is required by the MinIO STS API.
+                # Source: https://min.io/docs/minio/linux/developers/security-token-service/AssumeRoleWithWebIdentity.html
+                STS_RESPONSE=$(mc --no-color curl \
+                  --method POST \
+                  "http://minio:9000/?Action=AssumeRoleWithWebIdentity&Version=2011-06-15&WebIdentityToken=${JWT}&RoleArn=${ROLE_ARN}&DurationSeconds=900")
+
+                AK=$(echo "$STS_RESPONSE" | grep -oP '(?<=<AccessKeyId>).*?(?=</AccessKeyId>)')
+                SK=$(echo "$STS_RESPONSE" | grep -oP '(?<=<SecretAccessKey>).*?(?=</SecretAccessKey>)')
+                ST=$(echo "$STS_RESPONSE" | grep -oP '(?<=<SessionToken>).*?(?=</SessionToken>)')
+
+                if [ -z "$AK" ] || [ -z "$SK" ] || [ -z "$ST" ]; then
+                  echo "ERROR: STS exchange failed. Response:" >&2
+                  echo "$STS_RESPONSE" >&2
+                  exit 1
+                fi
+
+                echo "STS exchange successful; temp AK=${AK}"
+
+                # Set mc alias with temp credentials.
+                # mc does not have a --session-token flag; the session token is
+                # passed via the AWS_SESSION_TOKEN env var that mc respects via
+                # the AWS SDK credential chain. We write a credentials file to
+                # MC_CONFIG_DIR instead, which mc reads directly.
+                # Alternative: use AWS CLI `aws s3 sync` with --profile that
+                # reads AWS_SESSION_TOKEN — either works; mc is already in the image.
+                mkdir -p /tmp/mc/credentials
+                mc alias set obj http://minio:9000 "$AK" "$SK" \
+                  --api S3v4
+
+                # mc does not support SessionToken via alias set — write the
+                # credentials in AWS INI format to the mc aliases config path.
+                # mc merges ~/.mc/aliases/<alias> with env; the session token
+                # is honoured when present in the aliases config file.
+                CONFIG_FILE="/tmp/mc/aliases/obj.json"
+                mkdir -p "$(dirname "$CONFIG_FILE")"
+                printf '{"url":"http://minio:9000","accessKey":"%s","secretKey":"%s","sessionToken":"%s","api":"s3v4","lookup":"auto"}\n' \
+                  "$AK" "$SK" "$ST" > "$CONFIG_FILE"
+
                 mc ready obj
                 echo "waiting for required model object..."
                 until mc stat obj/aegis-models/whisper-tiny-en/921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f.bin >/dev/null 2>&1; do
@@ -67,6 +210,8 @@ patches:
                 mc mirror --overwrite obj/aegis-models /models
                 echo "model CAS populated:"; ls -R /models
             env:
+              # Root creds needed ONLY for the one-time Role ARN lookup above.
+              # The actual model-fetch uses the STS temp creds.
               - name: MINIO_ROOT_USER
                 valueFrom:
                   secretKeyRef:
@@ -97,11 +242,30 @@ patches:
                 mountPath: /models
               - name: tmp
                 mountPath: /tmp
+              - name: spire-svid
+                mountPath: /run/spire/svid
+                readOnly: true
 
-  # --- Seed Job: same model-fetch init-container -------------------------
-  # The seed Job loads bge-m3 from the same CAS store, so it needs /models
-  # populated too. bge-m3 is required=false (RAG degrades gracefully), so the
-  # mirror brings whatever the bucket holds; the Job runs against it.
+      # Add the spire-agent socket hostPath volume and the svid emptyDir
+      # shared between the two init-containers.
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: spire-agent-socket
+          hostPath:
+            path: /run/spire/agent-sockets
+            type: DirectoryOrCreate
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: spire-svid
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Ki
+
+  # =========================================================================
+  # Seed Job: same two-step SPIRE init-container sequence.
+  # =========================================================================
   - target:
       group: batch
       version: v1
@@ -111,6 +275,42 @@ patches:
       - op: add
         path: /spec/template/spec/initContainers
         value:
+          - name: fetch-jwt
+            image: ghcr.io/spiffe/spire-agent@sha256:7561ee91bfe07812f335d5b9e564bbb2ab77ef601558898a23177f692db15fc1
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -eu
+                until [ -S /run/spire/agent-sockets/spire-agent.sock ]; do
+                  echo "waiting for SPIRE agent socket..."; sleep 2
+                done
+                /opt/spire/bin/spire-agent api fetch jwt \
+                  -audience minio \
+                  -socketPath /run/spire/agent-sockets/spire-agent.sock \
+                  | grep -oP '(?<=token: ).*' \
+                  > /run/spire/svid/jwt
+                echo "JWT-SVID written"
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              runAsGroup: 1000
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: "10m"
+                memory: "32Mi"
+              limits:
+                cpu: "100m"
+                memory: "64Mi"
+            volumeMounts:
+              - name: spire-agent-socket
+                mountPath: /run/spire/agent-sockets
+                readOnly: true
+              - name: spire-svid
+                mountPath: /run/spire/svid
           - name: model-fetch
             image: quay.io/minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
             command: ["/bin/sh", "-c"]
@@ -118,9 +318,29 @@ patches:
               - |
                 set -eu
                 export MC_CONFIG_DIR=/tmp/mc
-                until mc alias set obj http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
-                  echo "waiting for MinIO..."; sleep 2
-                done
+                JWT=$(cat /run/spire/svid/jwt)
+                ROLE_ARN=$(mc alias set root-tmp http://minio:9000 \
+                               "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" \
+                               --api S3v4 2>/dev/null && \
+                             mc idp openid info root-tmp 2>/dev/null \
+                               | grep -oP 'RoleARN:\s*\K[^\s]+' \
+                             || echo "")
+                if [ -z "$ROLE_ARN" ]; then
+                  echo "ERROR: could not retrieve MinIO OIDC Role ARN." >&2; exit 1
+                fi
+                STS_RESPONSE=$(mc --no-color curl \
+                  --method POST \
+                  "http://minio:9000/?Action=AssumeRoleWithWebIdentity&Version=2011-06-15&WebIdentityToken=${JWT}&RoleArn=${ROLE_ARN}&DurationSeconds=900")
+                AK=$(echo "$STS_RESPONSE" | grep -oP '(?<=<AccessKeyId>).*?(?=</AccessKeyId>)')
+                SK=$(echo "$STS_RESPONSE" | grep -oP '(?<=<SecretAccessKey>).*?(?=</SecretAccessKey>)')
+                ST=$(echo "$STS_RESPONSE" | grep -oP '(?<=<SessionToken>).*?(?=</SessionToken>)')
+                if [ -z "$AK" ] || [ -z "$SK" ] || [ -z "$ST" ]; then
+                  echo "ERROR: STS exchange failed." >&2; echo "$STS_RESPONSE" >&2; exit 1
+                fi
+                mkdir -p /tmp/mc/aliases
+                mc alias set obj http://minio:9000 "$AK" "$SK" --api S3v4
+                printf '{"url":"http://minio:9000","accessKey":"%s","secretKey":"%s","sessionToken":"%s","api":"s3v4","lookup":"auto"}\n' \
+                  "$AK" "$SK" "$ST" > /tmp/mc/aliases/obj.json
                 mc ready obj
                 mc mirror --overwrite obj/aegis-models /models
                 echo "model CAS populated:"; ls -R /models
@@ -155,12 +375,30 @@ patches:
                 mountPath: /models
               - name: tmp
                 mountPath: /tmp
+              - name: spire-svid
+                mountPath: /run/spire/svid
+                readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: spire-agent-socket
+          hostPath:
+            path: /run/spire/agent-sockets
+            type: DirectoryOrCreate
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: spire-svid
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Ki
 
-  # --- Engine NetworkPolicy: allow egress to MinIO -----------------------
-  # The base engine NetworkPolicy is default-deny egress (443 + DNS only). The
-  # model-fetch init-container shares the engine pod's network identity, so it
-  # needs an explicit allow to the in-cluster MinIO (9000). Append, don't
-  # replace, the egress list.
+  # =========================================================================
+  # Engine NetworkPolicy: allow egress to MinIO :9000
+  # (carried forward from WS2-2 — still needed for STS calls on :9000)
+  # Also add egress to spire-system :8081 (SVID issuance from agent via UDS
+  # does not require a NetworkPolicy rule — UDS is not network traffic).
+  # =========================================================================
   - target:
       group: networking.k8s.io
       version: v1
@@ -177,3 +415,139 @@ patches:
           ports:
             - port: 9000
               protocol: TCP
+
+  # =========================================================================
+  # MinIO Deployment: add OIDC/STS environment variables so MinIO trusts
+  # JWT-SVIDs issued by SPIRE for AssumeRoleWithWebIdentity.
+  #
+  # Config key reference:
+  #   Source: https://min.io/docs/minio/linux/reference/minio-server/settings/iam/openid.html
+  #   Source: https://github.com/minio/minio/blob/master/docs/sts/web-identity.md
+  #
+  # Design choices:
+  #   MINIO_IDENTITY_OPENID_CONFIG_URL — points to the oidc-discovery-provider
+  #     sidecar. Plain HTTP (not HTTPS) because the service is in-cluster and
+  #     the oidc-discovery-provider runs with allow_insecure_scheme=true.
+  #     LOCAL-DEV shortcut; switch to https:// + serving_cert_file for prod.
+  #   MINIO_IDENTITY_OPENID_CLIENT_ID = "minio" — must match the `audience`
+  #     requested by `spire-agent api fetch jwt -audience minio`.
+  #     MinIO validates that the JWT's `aud` claim contains this value.
+  #   MINIO_IDENTITY_OPENID_ROLE_POLICY = "aegis-models-readonly" — the policy
+  #     created by the bootstrap Job. Role-policy mode (not claim-name mode)
+  #     because SPIRE JWT-SVIDs carry no custom `policy` claim by default.
+  #     In role-policy mode MinIO prints a Role ARN at startup; the engine
+  #     init-container fetches that ARN dynamically (see patch above).
+  #   MINIO_IDENTITY_OPENID_CLIENT_SECRET = "" — SPIRE JWTs are signed by
+  #     the SPIRE CA; MinIO validates them via the JWKS endpoint, not a
+  #     client secret. The env var is set to empty; MinIO still validates
+  #     the signature via /keys from the oidc-discovery-provider.
+  # =========================================================================
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: minio
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MINIO_IDENTITY_OPENID_ENABLE
+          value: "on"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MINIO_IDENTITY_OPENID_CONFIG_URL
+          value: "http://spire-oidc.spire-system.svc.cluster.local/.well-known/openid-configuration"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MINIO_IDENTITY_OPENID_CLIENT_ID
+          value: "minio"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MINIO_IDENTITY_OPENID_CLIENT_SECRET
+          value: ""
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MINIO_IDENTITY_OPENID_ROLE_POLICY
+          value: "aegis-models-readonly"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MINIO_IDENTITY_OPENID_DISPLAY_NAME
+          value: "SPIRE"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: MINIO_IDENTITY_OPENID_SCOPES
+          value: "openid"
+
+  # =========================================================================
+  # MinIO bootstrap-job: add a policy-creation step.
+  # We append a second init-container to the existing minio-bootstrap Job
+  # that creates the aegis-models-readonly IAM policy on MinIO after the
+  # bucket is seeded. This is idempotent (mc admin policy create fails
+  # gracefully if the policy exists).
+  # =========================================================================
+  - target:
+      group: batch
+      version: v1
+      kind: Job
+      name: minio-bootstrap
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/-
+        value:
+          name: create-policy
+          image: quay.io/minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              export MC_CONFIG_DIR=/tmp/mc
+              until mc alias set obj http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+                echo "waiting for MinIO..."; sleep 2
+              done
+              # Create the read-only policy (idempotent)
+              mc admin policy create obj aegis-models-readonly /policy/aegis-models-readonly.json \
+                || echo "policy already exists, continuing"
+              echo "MinIO OIDC policy setup complete"
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_PASSWORD
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+          volumeMounts:
+            - name: policy
+              mountPath: /policy
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: policy
+          configMap:
+            name: minio-spire-policy

@@ -1,0 +1,162 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spire-agent
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-agent
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spire-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spire-agent
+        app.kubernetes.io/part-of: spire
+    spec:
+      serviceAccountName: spire-agent
+      # hostPID + hostNetwork: required by the WorkloadAttestor "k8s" plugin
+      # so the agent can walk /proc to map a workload PID to its cgroup/pod.
+      # These fields force a "privileged" PSA label on the namespace.
+      # Source: https://github.com/spiffe/spire-tutorials/blob/main/k8s/quickstart/agent-daemonset.yaml
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      # Single-node Talos: the control-plane node carries the
+      # node-role.kubernetes.io/control-plane taint. Tolerate it so the
+      # DaemonSet schedules on control-plane nodes (required when there is
+      # only one node and it IS the control-plane).
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      # automountServiceAccountToken=false — we use a projected token instead
+      # (audience-scoped to "spire-server", matches server's expected audience).
+      automountServiceAccountToken: false
+      securityContext:
+        # runAsNonRoot: true would be preferred, but hostPID+hostNetwork on
+        # some kernels requires uid 0 for /proc traversal. SPIRE agent v1.11
+        # can run as non-root for the Workload API; the WorkloadAttestor "k8s"
+        # plugin uses the kubelet HTTP API (not /proc) when node_name_env is
+        # set, so we CAN run non-root here.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Wait for the SPIRE Server gRPC port to be reachable before starting
+        # the agent. Without this the agent may crash-loop during initial
+        # cluster bootstrap when the server pod is not yet ready.
+        - name: wait-for-server
+          # Reuse the agent image — it carries /opt/spire/bin/spire-agent which
+          # can check connectivity. We use a simple shell loop instead of
+          # wait-for-it to avoid pulling an extra image.
+          image: ghcr.io/spiffe/spire-agent@sha256:7561ee91bfe07812f335d5b9e564bbb2ab77ef601558898a23177f692db15fc1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until nc -z spire-server.spire-system.svc.cluster.local 8081 2>/dev/null; do
+                echo "waiting for spire-server:8081..."; sleep 2
+              done
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "16Mi"
+            limits:
+              cpu: "50m"
+              memory: "32Mi"
+      containers:
+        - name: spire-agent
+          # Pinned digest (v1.11.2, linux/arm64-capable multi-arch index).
+          image: ghcr.io/spiffe/spire-agent@sha256:7561ee91bfe07812f335d5b9e564bbb2ab77ef601558898a23177f692db15fc1
+          args: ["-config", "/run/spire/config/agent.conf"]
+          env:
+            # Passed to WorkloadAttestor "k8s" as node_name_env so it can
+            # call the kubelet API on the correct node IP.
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: health
+            failureThreshold: 2
+            initialDelaySeconds: 15
+            periodSeconds: 60
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: spire-bundle
+              mountPath: /run/spire/bundle
+              readOnly: true
+            - name: spire-agent-socket
+              mountPath: /run/spire/agent-sockets
+            - name: spire-token
+              mountPath: /var/run/secrets/tokens
+              readOnly: true
+      volumes:
+        - name: spire-config
+          configMap:
+            name: spire-agent
+        # spire-bundle ConfigMap is populated by the server's k8sbundle Notifier.
+        # The agent reads bundle.crt from here to verify the server's TLS cert.
+        - name: spire-bundle
+          configMap:
+            name: spire-bundle
+        # hostPath: the Workload API socket MUST be on a hostPath so that
+        # workload pods (in aegis-core namespace) can mount it via hostPath.
+        # The engine init-container mounts /run/spire/agent-sockets read-only.
+        # Source: https://github.com/spiffe/spire-tutorials/blob/main/k8s/quickstart/agent-daemonset.yaml
+        - name: spire-agent-socket
+          hostPath:
+            path: /run/spire/agent-sockets
+            type: DirectoryOrCreate
+        # Projected ServiceAccount token: audience-scoped to "spire-server"
+        # so the server's TokenReview call succeeds. Default path matches
+        # k8s_psat plugin's token_path default.
+        - name: spire-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: spire-agent
+                  expirationSeconds: 7200
+                  audience: spire-server
