@@ -6,6 +6,12 @@ kind: Kustomization
 resources:
   - ../../base
 
+# AWS binding (WS1) — re-adds the ALB Ingress, ServiceMonitors, and the
+# WorkloadIdentity XR that moved off the neutral base. staging/prod are EKS
+# targets; the Talos overlay omits this component.
+components:
+  - ../../components/aws-binding
+
 # Registry injection (ADR-12) — annotation-driven, not kustomize.images.
 #
 # All three image-bearing manifests (gateway Rollout, engine Rollout,
@@ -53,7 +59,10 @@ replacements:
         fieldPaths:
           - spec.template.spec.containers.[name=gateway].image
         options:
-          delimiter: ":"
+          # `@` delimiter (ADR-10/14): registry spliced in front of the
+          # digest-pinned image, preserving the @sha256 digest from the
+          # JSON6902 patches below. (Was `:` in the pre-digest model.)
+          delimiter: "@"
           index: 0
   # Engine Rollout — container name: engine
   - source:
@@ -67,7 +76,10 @@ replacements:
         fieldPaths:
           - spec.template.spec.containers.[name=engine].image
         options:
-          delimiter: ":"
+          # `@` delimiter (ADR-10/14): registry spliced in front of the
+          # digest-pinned image, preserving the @sha256 digest from the
+          # JSON6902 patches below. (Was `:` in the pre-digest model.)
+          delimiter: "@"
           index: 0
   # Engine seed Job — container name: seed
   - source:
@@ -81,5 +93,37 @@ replacements:
         fieldPaths:
           - spec.template.spec.containers.[name=seed].image
         options:
-          delimiter: ":"
+          # `@` delimiter (ADR-10/14): registry spliced in front of the
+          # digest-pinned image, preserving the @sha256 digest from the
+          # JSON6902 patches below. (Was `:` in the pre-digest model.)
+          delimiter: "@"
           index: 0
+
+# Digest pins (ADR-10/14). Same mechanism + rationale as the staging overlay:
+# per-resource JSON6902 patches (Rollout CRDs sharing the name `aegis-core`),
+# seed Job == engine digest (ADR-14). Prod's digests are PROMOTED from staging
+# by a promotion PR that copies the staging-verified digests here in one commit
+# (ADR-14 atomic promotion). Placeholders until the WS3 ECR pipeline + promotion
+# flow set them — see staging overlay note on the WS3-deferred CI bump.
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    target:
+      kind: Rollout
+      name: aegis-core-gateway
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    target:
+      kind: Rollout
+      name: aegis-core-engine
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    target:
+      kind: Job
+      name: aegis-core-engine-seed

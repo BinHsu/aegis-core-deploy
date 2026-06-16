@@ -9,6 +9,12 @@ kind: Kustomization
 resources:
   - ../../base
 
+# AWS binding (WS1) — re-adds the ALB Ingress, ServiceMonitors, and the
+# WorkloadIdentity XR that moved off the neutral base. staging/prod are EKS
+# targets; the Talos overlay omits this component.
+components:
+  - ../../components/aws-binding
+
 # Registry injection (ADR-12) — identical channel as prod.
 # The platform ApplicationSet injects the full ECR repository URL via
 # `aegis.binhsu.org/ecr-repository` on all three image-bearing resources.
@@ -27,7 +33,10 @@ replacements:
         fieldPaths:
           - spec.template.spec.containers.[name=gateway].image
         options:
-          delimiter: ":"
+          # `@` delimiter (ADR-10/14): splice the platform-injected registry in
+          # front of the digest-pinned image, preserving the @sha256 digest set
+          # by the JSON6902 patches below. (Was `:` in the pre-digest model.)
+          delimiter: "@"
           index: 0
   # Engine Rollout — container name: engine
   - source:
@@ -41,7 +50,10 @@ replacements:
         fieldPaths:
           - spec.template.spec.containers.[name=engine].image
         options:
-          delimiter: ":"
+          # `@` delimiter (ADR-10/14): splice the platform-injected registry in
+          # front of the digest-pinned image, preserving the @sha256 digest set
+          # by the JSON6902 patches below. (Was `:` in the pre-digest model.)
+          delimiter: "@"
           index: 0
   # Engine seed Job — container name: seed
   - source:
@@ -55,13 +67,29 @@ replacements:
         fieldPaths:
           - spec.template.spec.containers.[name=seed].image
         options:
-          delimiter: ":"
+          # `@` delimiter (ADR-10/14): splice the platform-injected registry in
+          # front of the digest-pinned image, preserving the @sha256 digest set
+          # by the JSON6902 patches below. (Was `:` in the pre-digest model.)
+          delimiter: "@"
           index: 0
 
 # Env-diff lives in the overlay (ADR-12). Staging runs a leaner footprint
 # than prod: 1 replica on each Rollout instead of the base floor of 2.
 # The deliberate difference proves the image is identical across envs
 # and only config changes between them.
+# Digest pins (ADR-10/14 "build once, promote by digest"). Per-resource
+# JSON6902 patches because the workloads are Argo Rollout CRDs (kustomize's
+# images: transformer doesn't reach a CRD) sharing the image name `aegis-core`
+# (so a name-keyed transformer couldn't give gateway vs engine distinct
+# digests). The seed Job MUST carry the SAME digest as the engine Rollout
+# (ADR-14). The placeholder digests below are overwritten:
+#   - WS1 local Talos proof  -> overlays/talos (real locally-built digests)
+#   - WS3 (DEFERRED)         -> the aegis-core release CI bumps these from ECR
+#                               push digests. The CI's tag->digest rewrite is
+#                               WS3 work (it rides the ECR/OIDC pipeline, which
+#                               decision A defers to WS3); until then these stay
+#                               placeholders and validate.yml only enforces the
+#                               @sha256 SHAPE, not a specific build.
 patches:
   - patch: |-
       - op: replace
@@ -77,3 +105,25 @@ patches:
     target:
       kind: Rollout
       name: aegis-core-engine
+  # --- digest pins ---
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    target:
+      kind: Rollout
+      name: aegis-core-gateway
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    target:
+      kind: Rollout
+      name: aegis-core-engine
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    target:
+      kind: Job
+      name: aegis-core-engine-seed

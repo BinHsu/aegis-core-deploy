@@ -1,0 +1,109 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Talos / on-prem overlay (WS1). The neutral base + a Gateway API HTTPRoute.
+# Because the base is already provider-neutral (WS1-1 moved the ALB Ingress,
+# ServiceMonitors, and WorkloadIdentity XR to components/aws-binding), this
+# overlay is purely ADDITIVE — no $patch: delete needed, unlike greeter's
+# talos overlay whose base still carried an ALB Ingress.
+#
+# It does NOT include components/aws-binding, so on this target there is:
+#   - no ALB Ingress         -> a Gateway API HTTPRoute (httproute.yaml) instead
+#   - no ServiceMonitor      -> on-prem metrics via Alloy/OTel is WS2-DEFERRED
+#   - no WorkloadIdentity XR  -> the engine's identity substitute (SPIFFE/SPIRE
+#                               or sealed-secret) is WS2-DEFERRED; WS1 only
+#                               proves the release pipeline + neutral contract,
+#                               not a fully-serving core (decision B, 2026-06-16).
+#
+# The platform injects the target registry as `aegis.binhsu.org/ecr-repository`
+# (here a LOCAL registry, not ECR) via the ArgoCD Application's
+# commonAnnotations; the replacements below splice it in front of the
+# digest-pinned images — the SAME mechanism the staging/prod overlays use,
+# proving the injection contract is target-swappable.
+resources:
+  - ../../base
+  - httproute.yaml
+
+# Lean local footprint: 1 replica each (mirrors staging).
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+    target:
+      kind: Rollout
+      name: aegis-core-gateway
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+    target:
+      kind: Rollout
+      name: aegis-core-engine
+  # --- digest pins (locally-built images pushed to the in-cluster registry).
+  # Placeholders here; WS1-5 sets the real digests from the local Bazel build.
+  # seed Job == engine digest (ADR-14).
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    target:
+      kind: Rollout
+      name: aegis-core-gateway
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    target:
+      kind: Rollout
+      name: aegis-core-engine
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/image
+        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    target:
+      kind: Job
+      name: aegis-core-engine-seed
+
+# Registry injection — identical mechanism to staging/prod (delimiter `@`,
+# splice the platform-injected registry in front of the digest). Only the
+# injected VALUE differs per target: a local registry here, ECR there.
+replacements:
+  - source:
+      kind: Rollout
+      name: aegis-core-gateway
+      fieldPath: metadata.annotations.[aegis.binhsu.org/ecr-repository]
+    targets:
+      - select:
+          kind: Rollout
+          name: aegis-core-gateway
+        fieldPaths:
+          - spec.template.spec.containers.[name=gateway].image
+        options:
+          delimiter: "@"
+          index: 0
+  - source:
+      kind: Rollout
+      name: aegis-core-engine
+      fieldPath: metadata.annotations.[aegis.binhsu.org/ecr-repository]
+    targets:
+      - select:
+          kind: Rollout
+          name: aegis-core-engine
+        fieldPaths:
+          - spec.template.spec.containers.[name=engine].image
+        options:
+          delimiter: "@"
+          index: 0
+  - source:
+      kind: Job
+      name: aegis-core-engine-seed
+      fieldPath: metadata.annotations.[aegis.binhsu.org/ecr-repository]
+    targets:
+      - select:
+          kind: Job
+          name: aegis-core-engine-seed
+        fieldPaths:
+          - spec.template.spec.containers.[name=seed].image
+        options:
+          delimiter: "@"
+          index: 0

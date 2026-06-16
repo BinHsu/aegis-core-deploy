@@ -84,11 +84,14 @@ spec:
           # (ADR-0032, re-decided 2026-05-17). Edit it by hand only
           # when bootstrapping; normal releases bump it automatically.
           #
-          # The registry host is NOT carried here — it is lifted to
-          # the kustomize overlay (`k8s/overlays/prod/kustomization.yaml`
-          # `images:` block) via `newName`, per ADR-0036. CI rewrites
-          # only the tag (`staging-<git_sha>`) in this base manifest.
-          image: aegis-core:staging-6995fab1f037c632e919e5e321a6f0e26dbacfce
+          # Neutral default (WS1, ADR-10/14). Neither registry nor version is
+          # carried here: the real image is pinned BY DIGEST in each overlay
+          # (`aegis-core@sha256:<gateway-digest>`, a JSON6902 patch — kustomize's
+          # images: transformer can't reach a Rollout CRD nor distinguish the
+          # gateway/engine images that share the name `aegis-core`), and the
+          # overlay's replacement splices the platform-injected registry in
+          # front. Bare `aegis-core` is the standalone-build default only.
+          image: aegis-core
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

@@ -80,12 +80,11 @@ spec:
           # release-staging-image.yml after each release build
           # (ADR-0032, re-decided 2026-05-17).
           #
-          # The registry host is NOT carried here — it is lifted to
-          # the kustomize overlay (`k8s/overlays/prod/kustomization.yaml`
-          # `images:` block) via `newName`, per ADR-0036. CI rewrites
-          # only the tag (`engine-staging-<git_sha>`) in this base
-          # manifest.
-          image: aegis-core:engine-staging-6995fab1f037c632e919e5e321a6f0e26dbacfce
+          # Neutral default (WS1, ADR-10/14). Real image pinned BY DIGEST per
+          # overlay (`aegis-core@sha256:<engine-digest>`, JSON6902 patch);
+          # registry spliced by the overlay replacement. The seed Job rides the
+          # SAME engine digest (ADR-14). Bare `aegis-core` is the standalone default.
+          image: aegis-core
           imagePullPolicy: IfNotPresent
           ports:
             - name: grpc

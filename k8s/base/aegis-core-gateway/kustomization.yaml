@@ -1,10 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# Provider-neutral base (WS1). AWS-specific resources — the ALB Ingress and
+# the kube-prometheus-stack ServiceMonitor — moved to components/aws-binding.
+# The Talos target gets a Gateway API HTTPRoute via overlays/talos instead.
 resources:
   - serviceaccount.yaml
   - rollout.yaml
   - service.yaml
-  - ingress.yaml
   - networkpolicy.yaml
-  - servicemonitor.yaml
