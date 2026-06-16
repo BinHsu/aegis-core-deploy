@@ -1,0 +1,34 @@
+# MinIO STS Role ARN for the engine's AssumeRoleWithWebIdentity exchange (WS2-3).
+#
+# MinIO runs in role-policy mode (MINIO_IDENTITY_OPENID_ROLE_POLICY). In that
+# mode MinIO derives a Role ARN from the OIDC provider config at startup and
+# REQUIRES it on every AssumeRoleWithWebIdentity call. The ARN is a hash of the
+# config — not predictable and not settable — so it must be discovered once per
+# deployment and supplied here.
+#
+# Discover it on first deploy:
+#   kubectl -n aegis-core logs deploy/minio | grep -i 'rolearn'
+#   (or: mc idp openid info <alias> _ , which prints "RoleARN: arn:minio:iam:::role/...")
+# then set role_arn below and re-sync; the engine model-fetch init-container
+# reads it via configMapKeyRef.
+#
+# Why a ConfigMap and not a root-credential lookup in the engine init-container:
+# WS2-3's whole point is to remove static root creds from the engine path (the
+# IRSA-fidelity win). The engine reads only this ARN + its own JWT-SVID; it never
+# sees MINIO_ROOT_USER/PASSWORD.
+#
+# Productionization (deferred): the MinIO bootstrap Job — which legitimately
+# holds root creds — auto-populates this ConfigMap via a kubectl patch (needs
+# configmaps RBAC). Left manual at local-dev scale; this is the documented
+# compromise, in the ADR-16/17 style.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-sts
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: minio-sts
+    app.kubernetes.io/part-of: aegis-core
+    app.kubernetes.io/managed-by: argocd
+data:
+  role_arn: "arn:minio:iam:::role/REPLACE_WITH_MINIO_OIDC_ROLE_ARN"
