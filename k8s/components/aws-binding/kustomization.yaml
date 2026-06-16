@@ -1,0 +1,49 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+# AWS binding (WS1). The additive layer that makes the provider-neutral base
+# an EKS target — ADR-16's "AWS is one target bound by an additive overlay,
+# never the default others retrofit around". Included by overlays/staging and
+# overlays/prod; the Talos target (overlays/talos) does NOT include it and gets
+# a Gateway API HTTPRoute + on-prem substitutes instead.
+#
+# What lives here and why it is AWS-specific:
+#   - gateway-ingress.yaml        ALB Ingress (aws-load-balancer-controller)
+#   - gateway-servicemonitor.yaml kube-prometheus-stack CRD (Prometheus operator)
+#   - engine-servicemonitor.yaml  kube-prometheus-stack CRD
+#   - iam/                         WorkloadIdentity XR -> ACK Role -> AWS IAM (ADR-09)
+#   - engine SA IRSA marker        eks.amazonaws.com/role-arn injection target
+#
+# DEFERRED (documented per Bin 2026-06-16): the on-prem substitutes for the
+# identity axis (IRSA -> SPIFFE/SPIRE or sealed-secret), metrics collection
+# (ServiceMonitor -> Alloy/OTel), and L7 (ALB -> Gateway API) are WS2/WS0
+# scope, not WS1. WS1 only proves the contract is target-swappable; it does
+# not build the on-prem substitutes.
+resources:
+  - gateway-ingress.yaml
+  - gateway-servicemonitor.yaml
+  - engine-servicemonitor.yaml
+  - iam
+
+# Mirror the base's managed-by label onto these component resources — the
+# base `labels` transformer only reaches base resources, so without this the
+# moved resources would lose the label (render-parity regression caught in WS1).
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false
+
+patches:
+  # IRSA marker annotation — moved off the neutral base SA. Re-added here so
+  # the platform ApplicationSet can inject eks.amazonaws.com/role-arn on the
+  # EKS targets. The annotations map must exist as the JSON-patch target.
+  - target:
+      kind: ServiceAccount
+      name: aegis-core-engine
+    patch: |
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: aegis-core-engine
+        namespace: aegis-core
+        annotations:
+          aegis.binhsu.org/irsa-role-arn: platform-injected
