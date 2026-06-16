@@ -110,8 +110,14 @@ spec:
             # Same env block as the Rollout (rollout.yaml §env).
             # Match exactly so seed and serve see identical model /
             # vector-DB state.
+            # CAS ROOT DIRECTORY (see rollout.yaml §env for the full rationale).
+            # Stale pre-CAS file path corrected to the model root; the engine
+            # resolves <root>/<id>/<sha256>.<ext> and SHA-verifies at startup.
             - name: AEGIS_MODEL_PATH
-              value: "/models/ggml-tiny.en.bin"
+              value: "/models"
+            # Manifest ships in the image, outside /models (see rollout.yaml).
+            - name: AEGIS_MANIFEST_PATH
+              value: "/usr/local/share/aegis/models/manifest.json"
             - name: QDRANT_URL
               valueFrom:
                 secretKeyRef:

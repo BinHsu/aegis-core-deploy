@@ -1,0 +1,126 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bootstrap
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: minio-bootstrap
+    app.kubernetes.io/part-of: aegis-core
+    app.kubernetes.io/component: object-store-seed
+spec:
+  # Seeds the MinIO bucket with the engine's required model object. This is the
+  # on-prem analogue of the CI step that populates the AWS S3 model bucket
+  # (ROADMAP Phase 4c / ldz #85, AWS side still deferred) — ADR-18.
+  #
+  # Idempotent: `mc mb --ignore-existing` + `mc mirror` skip already-present
+  # objects, so re-running after a MinIO restart re-seeds without duplication.
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-bootstrap
+        app.kubernetes.io/part-of: aegis-core
+        app.kubernetes.io/component: object-store-seed
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Fetch whisper-tiny-en from its upstream origin and stage it at the
+        # CAS path the engine expects: <id>/<sha256>.<ext>. The SHA-256 in the
+        # manifest is the integrity anchor — we fetch from HuggingFace `main`
+        # (not a pinned revision) but verify the exact content hash, so a
+        # changed upstream fails loudly here instead of at engine preflight.
+        - name: fetch-model
+          image: curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              ID=whisper-tiny-en
+              SHA=921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f
+              URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+              DEST="/staging/${ID}/${SHA}.bin"
+              mkdir -p "/staging/${ID}"
+              echo "fetching ${URL} -> ${DEST}"
+              curl -fSL --retry 3 --retry-delay 5 -o "${DEST}" "${URL}"
+              echo "${SHA}  ${DEST}" | sha256sum -c -
+              echo "fetched + verified ${ID}"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: staging
+              mountPath: /staging
+      containers:
+        # Upload the staged CAS tree into the bucket. Waits for MinIO to be
+        # ready, creates the bucket, mirrors the staging dir into it.
+        - name: upload
+          image: quay.io/minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              export MC_CONFIG_DIR=/tmp/mc
+              echo "waiting for MinIO..."
+              until mc alias set obj http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+                sleep 2
+              done
+              mc ready obj
+              mc mb --ignore-existing obj/aegis-models
+              mc mirror --overwrite /staging obj/aegis-models
+              echo "bucket contents:"
+              mc ls --recursive obj/aegis-models
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_PASSWORD
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: staging
+              mountPath: /staging
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: staging
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

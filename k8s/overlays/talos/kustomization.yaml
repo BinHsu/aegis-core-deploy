@@ -9,10 +9,15 @@ kind: Kustomization
 # It does NOT include components/aws-binding, so on this target there is:
 #   - no ALB Ingress         -> a Gateway API HTTPRoute (httproute.yaml) instead
 #   - no ServiceMonitor      -> on-prem metrics via Alloy/OTel is WS2-DEFERRED
-#   - no WorkloadIdentity XR  -> the engine's identity substitute (SPIFFE/SPIRE
-#                               or sealed-secret) is WS2-DEFERRED; WS1 only
-#                               proves the release pipeline + neutral contract,
-#                               not a fully-serving core (decision B, 2026-06-16).
+#   - no WorkloadIdentity XR  -> the engine's identity substitute (SPIFFE/SPIRE)
+#                               is WS2-3-DEFERRED.
+#
+# It DOES include components/onprem-binding (WS2-2, ADR-18): the object-store
+# axis. MinIO substitutes the AWS S3 model bucket; an init-container mirrors it
+# into the engine's /models CAS store. Later WS2 slices extend that component
+# with the identity (SPIRE) and auth (Dex) axes.
+components:
+  - ../../components/onprem-binding
 #
 # The platform injects the target registry as `aegis.binhsu.org/ecr-repository`
 # (here a LOCAL registry, not ECR) via the ArgoCD Application's
@@ -39,8 +44,13 @@ patches:
     target:
       kind: Rollout
       name: aegis-core-engine
-  # --- digest pins. Real digests from the WS2-1 CI build on the arm64 runner
-  # (aegis-core release-onprem-image.yml run 27621629362, tag onprem-d919515).
+  # --- digest pins (aegis-core release-onprem-image.yml -> GHCR).
+  #   gateway: WS2-1 build (Go, distroless_static — runs fine).
+  #   engine + seed: WS2-2 build that made the engine actually RUNNABLE
+  #     (distroless_cc/debian13 + bundled manifest + GGML_NATIVE=OFF; the
+  #     WS2-1 engine image built but SIGILLed/failed to exec — see ADR-18 and
+  #     aegis-core#147). engine boot verified on local Talos: CAS preflight
+  #     passes against the MinIO-delivered model, gRPC :50051 up.
   # The digest identifies image content, so it holds whether served from GHCR
   # or the in-cluster registry the platform injects in front of it (crane copy
   # preserves the digest). seed Job == engine digest (ADR-14).
@@ -54,14 +64,14 @@ patches:
   - patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:4c854ece6e5ce1ecfed630307e1da9c827b8ea321c86c34a7eec56a552177a86
+        value: aegis-core@sha256:551744a9e9d9861c8f27964af1493026f871bca8431d6e04d3fb15763a8f7c05
     target:
       kind: Rollout
       name: aegis-core-engine
   - patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:4c854ece6e5ce1ecfed630307e1da9c827b8ea321c86c34a7eec56a552177a86
+        value: aegis-core@sha256:551744a9e9d9861c8f27964af1493026f871bca8431d6e04d3fb15763a8f7c05
     target:
       kind: Job
       name: aegis-core-engine-seed

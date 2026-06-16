@@ -99,10 +99,23 @@ spec:
               protocol: TCP
           env:
             - name: AEGIS_MODEL_PATH
-              # Matches `models/ggml-tiny.en.bin` relative to CWD
-              # which is /usr/local/bin in the image; engine resolves
-              # from /models by this env override.
-              value: "/models/ggml-tiny.en.bin"
+              # CAS ROOT DIRECTORY, not a file. The engine resolves each
+              # required model at <root>/<id>/<sha256>.<ext> and SHA-verifies
+              # it at startup (engine_cpp/src/models/manifest_loader.h;
+              # AEGIS_MANIFEST_PATH stays at its in-image default
+              # models/manifest.json). The prior value pointed at a single
+              # file — stale from the pre-CAS engine (ADR-0026 refactor); it
+              # made the engine look under /models/ggml-tiny.en.bin/<id>/...
+              # On-prem this dir is populated from MinIO by an init-container
+              # (components/onprem-binding, ADR-18); on AWS it is the S3+CSI
+              # mount (components/aws-binding, delivery deferred).
+              value: "/models"
+            - name: AEGIS_MANIFEST_PATH
+              # The integrity manifest ships in the engine IMAGE (it is
+              # versioned with the binary), NOT in the model store. It lives
+              # outside /models because the /models volume mount shadows the
+              # image's copy. Packaged at this path by packaging/engine/BUILD.bazel.
+              value: "/usr/local/share/aegis/models/manifest.json"
             # Qdrant Cloud credentials — Secret materialized by ldz's
             # ExternalSecret `qdrant-credentials` (ldz PR #146, cross-
             # repo contract in ldz #141). Keys are uppercase to match
