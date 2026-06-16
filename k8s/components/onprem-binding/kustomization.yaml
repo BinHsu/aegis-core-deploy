@@ -1,0 +1,179 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+# On-prem binding (WS2). The additive layer that makes the provider-neutral
+# base a Talos / on-prem target — the mirror of components/aws-binding, per
+# ADR-17's "every target = base + its binding component; base stays neutral".
+# Included by overlays/talos only.
+#
+# WS2-2 (this component, ADR-18): the OBJECT-STORE axis. On AWS the engine's
+# /models CAS store is backed by an S3 bucket + a Mountpoint-S3 CSI mount
+# (components/aws-binding owns that binding; AWS-side delivery still deferred,
+# ldz #85). The engine has NO in-process S3 client — it reads model files from
+# a local POSIX path ($AEGIS_MODEL_PATH, CAS layout <id>/<sha256>.<ext>) and
+# verifies each against the bundled manifest at startup (FATAL on miss). So the
+# substitution lives at the model-DELIVERY layer, not an endpoint config:
+#   - MinIO (S3-compatible) holds the model objects (minio/ + bootstrap Job).
+#   - an init-container mirrors MinIO -> the engine's /models emptyDir before
+#     the engine's CAS preflight runs (the on-prem analogue of the CSI mount).
+#
+# Later WS2 slices add their own axes here: WS2-3 SPIRE (identity, IRSA->),
+# WS2-4 Dex (gateway auth, Cognito->).
+resources:
+  - minio/secret.yaml
+  - minio/deployment.yaml
+  - minio/service.yaml
+  - minio/networkpolicy.yaml
+  - minio/bootstrap-job.yaml
+
+# Mirror the base's managed-by label onto these component resources — the base
+# `labels` transformer only reaches base resources (same render-parity reason
+# components/aws-binding re-adds it).
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false
+
+patches:
+  # --- Engine Rollout: model-fetch init-container -------------------------
+  # Populates the /models emptyDir from MinIO before the engine container's
+  # CAS preflight runs. JSON6902 (not strategic merge) because kustomize has
+  # no openapi schema for the Rollout CRD; `add` creates the initContainers
+  # key (absent in base). Mounts the base `models` volume RW (the engine
+  # container mounts it readOnly) and `tmp` for the mc config dir.
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: Rollout
+      name: aegis-core-engine
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers
+        value:
+          - name: model-fetch
+            image: quay.io/minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -eu
+                export MC_CONFIG_DIR=/tmp/mc
+                until mc alias set obj http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+                  echo "waiting for MinIO..."; sleep 2
+                done
+                mc ready obj
+                echo "waiting for required model object..."
+                until mc stat obj/aegis-models/whisper-tiny-en/921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f.bin >/dev/null 2>&1; do
+                  sleep 3
+                done
+                mc mirror --overwrite obj/aegis-models /models
+                echo "model CAS populated:"; ls -R /models
+            env:
+              - name: MINIO_ROOT_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ROOT_USER
+              - name: MINIO_ROOT_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ROOT_PASSWORD
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: "50m"
+                memory: "64Mi"
+              limits:
+                cpu: "500m"
+                memory: "256Mi"
+            volumeMounts:
+              - name: models
+                mountPath: /models
+              - name: tmp
+                mountPath: /tmp
+
+  # --- Seed Job: same model-fetch init-container -------------------------
+  # The seed Job loads bge-m3 from the same CAS store, so it needs /models
+  # populated too. bge-m3 is required=false (RAG degrades gracefully), so the
+  # mirror brings whatever the bucket holds; the Job runs against it.
+  - target:
+      group: batch
+      version: v1
+      kind: Job
+      name: aegis-core-engine-seed
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers
+        value:
+          - name: model-fetch
+            image: quay.io/minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -eu
+                export MC_CONFIG_DIR=/tmp/mc
+                until mc alias set obj http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+                  echo "waiting for MinIO..."; sleep 2
+                done
+                mc ready obj
+                mc mirror --overwrite obj/aegis-models /models
+                echo "model CAS populated:"; ls -R /models
+            env:
+              - name: MINIO_ROOT_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ROOT_USER
+              - name: MINIO_ROOT_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ROOT_PASSWORD
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: "50m"
+                memory: "64Mi"
+              limits:
+                cpu: "500m"
+                memory: "256Mi"
+            volumeMounts:
+              - name: models
+                mountPath: /models
+              - name: tmp
+                mountPath: /tmp
+
+  # --- Engine NetworkPolicy: allow egress to MinIO -----------------------
+  # The base engine NetworkPolicy is default-deny egress (443 + DNS only). The
+  # model-fetch init-container shares the engine pod's network identity, so it
+  # needs an explicit allow to the in-cluster MinIO (9000). Append, don't
+  # replace, the egress list.
+  - target:
+      group: networking.k8s.io
+      version: v1
+      kind: NetworkPolicy
+      name: aegis-core-engine
+    patch: |-
+      - op: add
+        path: /spec/egress/-
+        value:
+          to:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: minio
+          ports:
+            - port: 9000
+              protocol: TCP

@@ -60,16 +60,22 @@ jobs:
       - name: A. Digest-presence guard (ImagePullBackOff regression)
         run: |
           set -euo pipefail
-          # ADR-10/14 digest model: every image line must be
-          # `aegis-core@sha256:<64-hex>`. Bare name / tag / :latest => fail.
+          # ADR-10/14 digest model: EVERY image line must be pinned by
+          # @sha256:<64-hex>. Bare name / tag / :latest => fail (ImagePullBackOff
+          # risk). The aegis-core workload images render as bare
+          # `aegis-core@sha256:…` (the platform splices the registry in front at
+          # sync time — verified by guard B). The talos onprem-binding (WS2-2)
+          # also carries third-party images (MinIO/mc/curl); those are pinned by
+          # their own full digest and are equally acceptable here — the guard is
+          # "is every image digest-pinned", not "is every image aegis-core".
           for overlay in staging prod talos; do
             echo "=== k8s/overlays/${overlay} (standalone) ==="
             kustomize build "k8s/overlays/${overlay}" > "rendered-${overlay}.yaml"
             image_lines="$(grep -E '^\s+image: ' "rendered-${overlay}.yaml")"
             echo "${image_lines}"
-            bad="$(echo "${image_lines}" | grep -Ev '^[[:space:]]*image: aegis-core@sha256:[0-9a-f]{64}$' || true)"
+            bad="$(echo "${image_lines}" | grep -Ev '^[[:space:]]*image: [^[:space:]]+@sha256:[0-9a-f]{64}$' || true)"
             [ -z "${bad}" ] \
-              || { echo "::error::${overlay}: image line(s) not pinned as aegis-core@sha256:<64-hex> (digest pin or replacements wiring missing?):"; echo "${bad}"; exit 1; }
+              || { echo "::error::${overlay}: image line(s) not digest-pinned as <name>@sha256:<64-hex> (digest pin or replacements wiring missing?):"; echo "${bad}"; exit 1; }
             echo "--- digest-presence: OK ---"
           done
 
@@ -89,10 +95,17 @@ jobs:
             kustomize build "/tmp/inject-sim/overlays/${overlay}" > "rendered-${overlay}-injected.yaml"
             image_lines="$(grep -E '^\s+image: ' "rendered-${overlay}-injected.yaml")"
             echo "${image_lines}"
-            # Registry prefix in front, @sha256 digest preserved.
-            bad="$(echo "${image_lines}" | grep -Ev "^[[:space:]]*image: ${TEST_REPO}@sha256:[0-9a-f]{64}\$" || true)"
-            [ -z "${bad}" ] \
-              || { echo "::error::${overlay}: injected image(s) not ${TEST_REPO}@sha256:<digest> (delimiter/index regression?):"; echo "${bad}"; exit 1; }
+            # Only the aegis-core workload images are platform-injected; the
+            # talos onprem-binding's third-party images (MinIO/mc/curl) are NOT
+            # (the replacements target only the aegis-core Rollouts/Job). So
+            # assert: (1) no aegis-core image is left bare/un-injected, and
+            # (2) the registry-spliced form is present. Third-party images,
+            # already digest-pinned (guard A), are ignored here.
+            leaked="$(echo "${image_lines}" | grep -E '^[[:space:]]*image: aegis-core@sha256:' || true)"
+            [ -z "${leaked}" ] \
+              || { echo "::error::${overlay}: aegis-core image not injected (still bare aegis-core@sha256 — delimiter/index regression?):"; echo "${leaked}"; exit 1; }
+            echo "${image_lines}" | grep -qE "^[[:space:]]*image: ${TEST_REPO}@sha256:[0-9a-f]{64}\$" \
+              || { echo "::error::${overlay}: no ${TEST_REPO}@sha256:<digest> image — registry splice did not apply."; exit 1; }
             echo "--- injection: OK ---"
           done
 

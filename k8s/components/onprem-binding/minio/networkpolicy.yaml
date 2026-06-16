@@ -1,0 +1,57 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/part-of: aegis-core
+  annotations:
+    aegis.binhsu.org/policy-rationale: onprem-object-store-ingress
+spec:
+  # MinIO accepts S3 (9000) + console (9001) only from pods in this namespace
+  # (the engine/seed model-fetch init-containers and the bootstrap Job).
+  # Mirrors the engine NetworkPolicy's allowlist posture (ldz-54 default-deny).
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 9000
+          protocol: TCP
+        - port: 9001
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-bootstrap
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: minio-bootstrap
+    app.kubernetes.io/part-of: aegis-core
+  annotations:
+    aegis.binhsu.org/policy-rationale: onprem-object-store-seed-egress
+spec:
+  # The bootstrap Job fetches the model from the upstream origin (443) and
+  # uploads it to MinIO (9000). DNS is allowed by the cluster baseline.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: minio-bootstrap
+  policyTypes: [Egress]
+  egress:
+    # Upstream model fetch (HuggingFace) over HTTPS.
+    - ports:
+        - port: 443
+          protocol: TCP
+    # Upload to the in-cluster MinIO.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: minio
+      ports:
+        - port: 9000
+          protocol: TCP
