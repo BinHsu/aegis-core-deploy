@@ -121,12 +121,12 @@ replacements:
 # (ADR-14 atomic promotion). Placeholders until the WS3 ECR pipeline + promotion
 # flow set them — see staging overlay note on the WS3-deferred CI bump.
 patches:
-  # Prod hostname (WS3, ADR-19). The aws-binding component ships the staging
-  # host as its default; prod serves on the apex sub-domain aegis-api.binhsu.org.
+  # Prod hostname (WS3-R). The aws-binding component ships the staging host as
+  # default; prod serves on its per-env subdomain aegis-api.prod.aws.binhsu.org.
   - patch: |-
       - op: replace
         path: /spec/rules/0/host
-        value: aegis-api.binhsu.org
+        value: aegis-api.prod.aws.binhsu.org
     target:
       kind: Ingress
       name: aegis-core-gateway
