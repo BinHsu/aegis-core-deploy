@@ -42,12 +42,12 @@ metadata:
     external-dns.alpha.kubernetes.io/aws-evaluate-target-health: "true"
 spec:
   rules:
-    # DNS host. This component default is the STAGING hostname; the prod
-    # overlay patches it to `aegis-api.binhsu.org` (WS3, ADR-19 real-domain
-    # decision — binhsu.org). Route53 record + ACM cert are platform-side;
-    # ArgoCD surfaces the Ingress as pending-validation until DNS + cert are
-    # in place — expected on first bring-up, not a manifest failure.
-    - host: aegis-api.staging.binhsu.org
+    # DNS host. Component default is the STAGING hostname; the prod overlay
+    # patches it to `aegis-api.prod.aws.binhsu.org` (WS3-R: per-env subdomain
+    # under aws.binhsu.org, delegated from Cloudflare). Route53 record + ACM cert
+    # are platform-side; ArgoCD surfaces the Ingress as pending-validation until
+    # DNS + cert are in place — expected on first bring-up, not a failure.
+    - host: aegis-api.staging.aws.binhsu.org
       http:
         paths:
           - path: /
