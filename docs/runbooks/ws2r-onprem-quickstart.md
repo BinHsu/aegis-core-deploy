@@ -38,24 +38,37 @@ with little free RAM the full co-resident stack may not fit; see
 The engine and gateway images are published by aegis-core CI to **two** GHCR
 packages — `aegis-core-engine` and `aegis-core-gateway`. The manifests use the
 single-repo model (one repo, images distinguished by digest — the same shape the
-AWS side uses with ECR), so mirror both digests into **one** repo once. Copy
-preserves the digest, so the pins in `overlays/talos/kustomization.yaml` stay
-valid:
+AWS side uses with ECR), so mirror both digests into **one** repo once.
+
+**Preferred — the CI mirror (no PAT):** run the `onprem-image-mirror` workflow.
+It uses the built-in `GITHUB_TOKEN` (no token to paste) and, because this repo is
+public, the resulting `aegis-core` package inherits public visibility — no manual
+visibility change.
 
 ```sh
-# digests are in k8s/overlays/talos/kustomization.yaml
+gh workflow run onprem-image-mirror.yml --repo <you>/aegis-core-deploy
+# inputs default to the digests currently pinned in overlays/talos; override if yours differ
+gh run watch --repo <you>/aegis-core-deploy "$(gh run list --repo <you>/aegis-core-deploy -w onprem-image-mirror.yml -L1 --json databaseId --jq '.[0].databaseId')"
+```
+
+**Manual alternative (no CI):** mirror locally. Copy preserves the digest, so the
+pins in `overlays/talos/kustomization.yaml` stay valid. With `crane`:
+
+```sh
 crane copy ghcr.io/binhsu/aegis-core-engine@sha256:<engine-digest>   ghcr.io/<you>/aegis-core@sha256:<engine-digest>
 crane copy ghcr.io/binhsu/aegis-core-gateway@sha256:<gateway-digest> ghcr.io/<you>/aegis-core@sha256:<gateway-digest>
 ```
 
-Make `ghcr.io/<you>/aegis-core` public, then point the overlay at it — either
-edit `newName` in `k8s/overlays/talos-standalone/kustomization.yaml`, or set
+…or with Docker (no install): `docker buildx imagetools create -t ghcr.io/<you>/aegis-core:onprem-engine ghcr.io/binhsu/aegis-core-engine@sha256:<engine-digest>` (repeat for gateway). A locally-pushed package starts **private** — make it public in the GitHub package settings, or the cluster needs an `imagePullSecret`.
+
+Then point the overlay at your repo — edit `newName` in
+`k8s/overlays/talos-standalone/kustomization.yaml`, or set
 `REGISTRY=ghcr.io/<you>/aegis-core` when you run `quickstart.sh`. If a public
 `ghcr.io/binhsu/aegis-core` already exists, the default works with no copy.
 
 > Forking aegis-core too? Run its `release-onprem-image.yml` in your fork to
-> build both images into your own GHCR, then mirror as above (or adjust that
-> workflow to push both to one repo).
+> build both images into your own GHCR, then mirror as above. The clean
+> long-term fix is to push both to one repo from that release workflow directly.
 
 ---
 
