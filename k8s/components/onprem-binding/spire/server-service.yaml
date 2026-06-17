@@ -1,0 +1,44 @@
+---
+# gRPC service: used by the spire-agent for attestation + SVID issuance.
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-server
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-server
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: spire-server
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: grpc
+      protocol: TCP
+---
+# OIDC service: exposes the discovery provider so MinIO can fetch
+# /.well-known/openid-configuration and /keys.
+# MinIO resolves http://spire-oidc.spire-system.svc.cluster.local
+# (matching jwt_issuer in server.conf and MINIO_IDENTITY_OPENID_CONFIG_URL).
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-oidc
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-oidc
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+spec:
+  type: ClusterIP
+  selector:
+    # Points at the spire-server pod (oidc-discovery-provider runs as a sidecar)
+    app.kubernetes.io/name: spire-server
+  ports:
+    - name: oidc-http
+      port: 80
+      targetPort: oidc-http
+      protocol: TCP

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spire-system
+  labels:
+    # restricted PodSecurity (PSA) for the spire-system namespace.
+    # spire-agent runs with hostPID+hostNetwork and mounts a hostPath socket,
+    # which violates "restricted" — it needs "privileged". We apply the minimum
+    # viable label set here:
+    #   enforce=privileged  avoids DaemonSet pod rejections
+    #   warn/audit=baseline keep noise low while still auditing drift
+    # The server + oidc-discovery-provider pods both run non-root with no
+    # host access and would pass "restricted"; they run in the same namespace
+    # for operational simplicity. Separate namespaces would let the server
+    # keep "restricted", but that overhead isn't justified for a local-dev cluster.
+    # Source: https://kubernetes.io/docs/concepts/security/pod-security-admission/
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/audit: baseline
+    app.kubernetes.io/managed-by: argocd

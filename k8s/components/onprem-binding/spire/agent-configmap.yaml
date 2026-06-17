@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-agent
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-agent
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+data:
+  agent.conf: |
+    # SPIRE Agent configuration for aegis-core on-prem (Talos) deployment.
+    # Source: https://github.com/spiffe/spire-tutorials/blob/main/k8s/quickstart/agent-configmap.yaml
+    # Source: https://github.com/spiffe/spire/blob/main/conf/agent/agent_full.conf
+
+    agent {
+      # /run/spire/data is a writable emptyDir (rootfs is read-only).
+      data_dir    = "/run/spire/data"
+      log_level   = "INFO"
+      server_address = "spire-server.spire-system.svc.cluster.local"
+      server_port    = "8081"
+      # Workload API UDS socket. Engine init-container calls:
+      #   spire-agent api fetch jwt -socketPath /run/spire/agent-sockets/spire-agent.sock
+      socket_path = "/run/spire/agent-sockets/spire-agent.sock"
+      # trust_bundle_path: the k8sbundle Notifier writes the CA cert here via
+      # the spire-bundle ConfigMap mounted below.
+      trust_bundle_path = "/run/spire/bundle/bundle.crt"
+      trust_domain      = "aegis.local"
+    }
+
+    plugins {
+      # k8s_psat NodeAttestor: presents a projected SA token to the server.
+      # cluster must match the server's NodeAttestor cluster key ("aegis-local").
+      # Source: https://github.com/spiffe/spire/blob/main/doc/plugin_agent_nodeattestor_k8s_psat.md
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          cluster = "aegis-local"
+          # token_path default: /var/run/secrets/tokens/spire-agent
+          # This matches the projected volume mount in the DaemonSet below.
+        }
+      }
+
+      # KeyManager memory: agent keys are regenerated on restart (acceptable
+      # for ephemeral local-dev; use "disk" on a PVC for persistence).
+      KeyManager "memory" {
+        plugin_data {}
+      }
+
+      # WorkloadAttestor k8s: resolves workload pod identity via the kubelet API.
+      # skip_kubelet_verification = true is required on Talos: the kubelet cert
+      # is signed by a Talos-internal CA not present in the cluster CA bundle.
+      # node_name_env = "MY_NODE_NAME" — we inject the node IP via fieldRef
+      # (same pattern as the quickstart).
+      # Source: https://github.com/spiffe/spire/blob/main/doc/plugin_agent_workloadattestor_k8s.md
+      WorkloadAttestor "k8s" {
+        plugin_data {
+          skip_kubelet_verification = true
+          node_name_env             = "MY_NODE_NAME"
+        }
+      }
+    }
+
+    health_checks {
+      listener_enabled = true
+      bind_address     = "0.0.0.0"
+      bind_port        = "8080"
+      live_path        = "/live"
+      ready_path       = "/ready"
+    }

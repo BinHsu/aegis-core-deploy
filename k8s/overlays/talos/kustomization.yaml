@@ -9,13 +9,19 @@ kind: Kustomization
 # It does NOT include components/aws-binding, so on this target there is:
 #   - no ALB Ingress         -> a Gateway API HTTPRoute (httproute.yaml) instead
 #   - no ServiceMonitor      -> on-prem metrics via Alloy/OTel is WS2-DEFERRED
-#   - no WorkloadIdentity XR  -> the engine's identity substitute (SPIFFE/SPIRE)
-#                               is WS2-3-DEFERRED.
+#   - no WorkloadIdentity XR  -> the engine's identity substitute is SPIFFE/SPIRE
+#                               (WS2-3, live-verified — see onprem-binding).
 #
-# It DOES include components/onprem-binding (WS2-2, ADR-18): the object-store
-# axis. MinIO substitutes the AWS S3 model bucket; an init-container mirrors it
-# into the engine's /models CAS store. Later WS2 slices extend that component
-# with the identity (SPIRE) and auth (Dex) axes.
+# It DOES include components/onprem-binding, which now carries two WS2 axes:
+#   - WS2-2 (ADR-18) OBJECT STORE: MinIO substitutes the AWS S3 model bucket;
+#     an init-container mirrors it into the engine's /models CAS store.
+#   - WS2-3 IDENTITY: SPIRE issues JWT-SVIDs; the engine exchanges them at
+#     MinIO STS (AssumeRoleWithWebIdentity) for scoped temp creds — the on-prem
+#     IRSA mirror, replacing WS2-2's static root credential. Live-verified on
+#     local Talos 2026-06-16 (L1 attest -> model-in-/models).
+# Gateway auth (Cognito -> Dex) and the in-cluster nginx frontend remain
+# on-prem-fidelity carry-forward, off the WS3 AWS critical path (WS3 uses the
+# real Cognito / CloudFront).
 components:
   - ../../components/onprem-binding
 #

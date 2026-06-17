@@ -1,0 +1,33 @@
+# spiffe-helper config for the engine's fetch-jwt init-container (WS2-3).
+#
+# Why spiffe-helper and not `spire-agent api fetch jwt`: the spire-agent CLI's
+# `fetch jwt` has NO -write flag (that exists only on `fetch x509`), and the
+# spire-agent image is distroless — no shell, so its stdout can't be redirected
+# to a file. spiffe-helper is the SPIRE-ecosystem tool for exactly this: fetch a
+# JWT-SVID over the Workload API socket and write it to a file for a workload
+# that is not SPIFFE-aware. daemon_mode=false (set via the -daemon-mode=false
+# flag on the container) makes it fetch once and exit — init-container semantics.
+#
+# jwt_audience MUST equal MINIO_IDENTITY_OPENID_CLIENT_ID ("minio") so MinIO
+# accepts the token's `aud` claim. The token is written to
+# <cert_dir>/<jwt_svid_file_name> = /run/spire/svid/jwt_svid.token, which the
+# sts-exchange init-container reads.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spiffe-helper-config
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: spiffe-helper-config
+    app.kubernetes.io/part-of: aegis-core
+    app.kubernetes.io/managed-by: argocd
+data:
+  helper.conf: |
+    agent_address = "/spiffe-workload-api/spire-agent.sock"
+    cert_dir = "/run/spire/svid"
+    jwt_svids = [
+      {
+        jwt_audience = "minio"
+        jwt_svid_file_name = "jwt_svid.token"
+      }
+    ]

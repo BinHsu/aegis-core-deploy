@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-server
+  namespace: spire-system
+  labels:
+    app.kubernetes.io/name: spire-server
+    app.kubernetes.io/part-of: spire
+    app.kubernetes.io/managed-by: argocd
+data:
+  server.conf: |
+    # SPIRE Server configuration for aegis-core on-prem (Talos) deployment.
+    # Source: https://github.com/spiffe/spire-tutorials/blob/main/k8s/quickstart/server-configmap.yaml
+    # Source: https://github.com/spiffe/spire/blob/main/conf/server/server_full.conf
+
+    server {
+      bind_address = "0.0.0.0"
+      bind_port    = "8081"
+      # Server-side socket exposed on a volume so the oidc-discovery-provider
+      # sidecar can connect via server_api { address = ... }
+      socket_path  = "/run/spire/server-sockets/api.sock"
+      trust_domain = "aegis.local"
+      data_dir     = "/run/spire/data"
+      log_level    = "INFO"
+
+      # jwt_issuer is the `iss` claim placed in JWT-SVIDs and the issuer field
+      # of the OIDC discovery document. It MUST match the URL MinIO uses to
+      # fetch /.well-known/openid-configuration.
+      # We use the in-cluster Service URL; MinIO resolves it inside the cluster.
+      # LOCAL-DEV shortcut: plain HTTP (no TLS). On a real deployment, set
+      # this to an https:// URL backed by a signed cert.
+      jwt_issuer = "http://spire-oidc.spire-system.svc.cluster.local"
+    }
+
+    plugins {
+      # SQLite3 on emptyDir — ephemeral, local-dev only.
+      # On a real on-prem deployment replace with PostgreSQL or a PVC-backed
+      # sqlite3. Source: https://github.com/spiffe/spire/blob/main/doc/plugin_server_datastore_sql.md
+      DataStore "sql" {
+        plugin_data {
+          database_type    = "sqlite3"
+          connection_string = "/run/spire/data/datastore.sqlite3"
+        }
+      }
+
+      # NodeAttestor k8s_psat: verifies the projected ServiceAccount token the
+      # agent presents at bootstrap via the Kubernetes TokenReview API.
+      # cluster name must match the agent's NodeAttestor config.
+      # service_account_allow_list: only agents running as spire-system/spire-agent
+      # may attest. Source: https://github.com/spiffe/spire/blob/main/doc/plugin_server_nodeattestor_k8s_psat.md
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          clusters = {
+            "aegis-local" = {
+              service_account_allow_list = ["spire-system:spire-agent"]
+            }
+          }
+        }
+      }
+
+      # KeyManager disk: private keys persist across server restarts on the
+      # data volume. For an emptyDir this means keys are lost on pod restart —
+      # agents must re-attest. Acceptable for local-dev; use KeyManager "aws_kms"
+      # or "disk" on a PVC for anything production-like.
+      # Source: https://github.com/spiffe/spire/blob/main/doc/plugin_server_keymanager_disk.md
+      KeyManager "disk" {
+        plugin_data {
+          keys_path = "/run/spire/data/keys.json"
+        }
+      }
+
+      # Notifier k8sbundle: publishes the trust bundle CA cert to the
+      # spire-bundle ConfigMap in spire-system. The agent mounts that ConfigMap
+      # as its trust_bundle_path so it can verify the server's X.509 SVID.
+      # Source: https://github.com/spiffe/spire/blob/main/doc/plugin_server_notifier_k8sbundle.md
+      Notifier "k8sbundle" {
+        plugin_data {
+          # NOTE: k8sbundle defaults namespace to "spire" and config_map to
+          # "spire-bundle" — NOT the server's own namespace. The default bit us:
+          # it tried ns "spire" and RBAC (Role lives in spire-system) forbade it,
+          # crashlooping the server. Set both explicitly to match where we run.
+          namespace  = "spire-system"
+          config_map = "spire-bundle"
+        }
+      }
+    }
+
+    health_checks {
+      listener_enabled = true
+      bind_address     = "0.0.0.0"
+      bind_port        = "8080"
+      live_path        = "/live"
+      ready_path       = "/ready"
+    }
