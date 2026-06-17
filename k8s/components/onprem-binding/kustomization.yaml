@@ -12,19 +12,22 @@ kind: Component
 # workload; the engine exchanges them at MinIO's STS AssumeRoleWithWebIdentity
 # for short-lived creds, replacing the static root-credential model-fetch
 # init-container (WS2-2). The MinIO Deployment is patched to trust JWT-SVIDs
-# via OIDC (MINIO_IDENTITY_OPENID_*). The engine runs two init-containers:
-#   1. fetch-jwt   (spire-agent image, distroless — NO shell): runs
-#      `spire-agent api fetch jwt -audience minio -write <dir>` directly as the
-#      container command (no /bin/sh, no grep), getting a JWT-SVID over the
-#      Workload API socket delivered by the SPIFFE CSI driver.
-#   2. model-fetch (aws-cli image): `aws sts assume-role-with-web-identity`
-#      against MinIO's STS endpoint exchanges the JWT-SVID for scoped temp creds,
-#      then `aws s3 sync` mirrors the bucket into /models. The AWS CLI is the
-#      faithful IRSA tool — it natively does AssumeRoleWithWebIdentity and
-#      honours AWS_SESSION_TOKEN, so no XML/grep parsing and no static root creds.
+# via OIDC (MINIO_IDENTITY_OPENID_*). The engine runs THREE init-containers
+# (the obvious single-tool images all failed on the constrained verify node —
+# see each container's comment in the patch below for why):
+#   1. fetch-jwt    (spiffe-helper): the spire-agent CLI has no JWT `-write`
+#      flag and its image is distroless (no shell to redirect), so spiffe-helper
+#      fetches the JWT-SVID over the Workload API socket and writes it to a file.
+#   2. sts-exchange (curl): AssumeRoleWithWebIdentity is a plain HTTP POST; the
+#      aws-cli image (the faithful IRSA tool) is 400MB and overflows the node's
+#      ephemeral storage, so curl does the exchange -> scoped temp creds.
+#   3. model-fetch  (mc): mirrors the bucket into /models with the scoped creds.
 #      The required Role ARN comes from the minio-sts ConfigMap (see that file).
+#   No static root credential anywhere in the engine's model-fetch path.
 #
-# WS2-4 Dex (gateway auth, Cognito->) is deferred to the next slice.
+# Gateway auth (Cognito -> Dex) and the in-cluster nginx frontend remain
+# on-prem-fidelity carry-forward, OFF the WS3 AWS critical path (WS3 uses the
+# real Cognito / CloudFront). Tracked on #46's close.
 resources:
   # --- MinIO (object store) ---
   - minio/secret.yaml
@@ -157,7 +160,7 @@ patches:
                 cat > /tmp/config.json <<EOF
                 {"version":"10","aliases":{"obj":{"url":"http://minio:9000","accessKey":"$AK","secretKey":"$SK","sessionToken":"$ST","api":"s3v4","path":"auto"}}}
                 EOF
-                echo "STS exchange OK; scoped temp AK=$AK"
+                echo "STS exchange OK; scoped temporary credentials issued"
             env:
               - name: ROLE_ARN
                 valueFrom:
@@ -311,7 +314,7 @@ patches:
                 cat > /tmp/config.json <<EOF
                 {"version":"10","aliases":{"obj":{"url":"http://minio:9000","accessKey":"$AK","secretKey":"$SK","sessionToken":"$ST","api":"s3v4","path":"auto"}}}
                 EOF
-                echo "STS exchange OK; scoped temp AK=$AK"
+                echo "STS exchange OK; scoped temporary credentials issued"
             env:
               - name: ROLE_ARN
                 valueFrom:
