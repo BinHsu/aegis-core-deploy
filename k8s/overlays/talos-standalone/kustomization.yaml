@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Talos STANDALONE overlay (WS2-R, gap #2) — for a forker who runs the on-prem
+# stack WITHOUT the aegis-platform ArgoCD layer.
+#
+# The `overlays/talos` overlay renders the workload images as bare
+# `aegis-core@sha256:<digest>`. In normal operation the platform's ArgoCD
+# ApplicationSet injects the target registry as the `aegis.binhsu.org/ecr-repository`
+# annotation, and talos's `replacements` splice it in front of the `@digest`.
+# A forker doing `kubectl apply -k overlays/talos` directly has no such
+# injection, so the images stay bare and un-pullable (ImagePullBackOff).
+#
+# This overlay closes that gap with a plain kustomize `images:` transformer: it
+# matches the rendered image name `aegis-core` (engine and gateway both use it,
+# distinguished only by digest — the single-repo model the AWS side uses with
+# ECR) and rewrites the repo to a real, pullable registry, KEEPING each digest.
+# No digests are duplicated here — they remain owned by overlays/talos.
+#
+# Default = the project's public reference images. THEY MUST FIRST EXIST IN ONE
+# repo. WS2-1 publishes engine + gateway as TWO GHCR packages
+# (aegis-core-engine, aegis-core-gateway); the single-repo model needs both
+# digests under one repo. Mirror them once (digests are preserved by copy):
+#
+#   crane copy ghcr.io/binhsu/aegis-core-engine@sha256:<engine-digest>  ghcr.io/<you>/aegis-core@sha256:<engine-digest>
+#   crane copy ghcr.io/binhsu/aegis-core-gateway@sha256:<gateway-digest> ghcr.io/<you>/aegis-core@sha256:<gateway-digest>
+#
+# (the exact digests are in overlays/talos/kustomization.yaml). Then point this
+# overlay at your repo — either edit `newName` below, or override without a file
+# edit:  kustomize edit set image aegis-core=ghcr.io/<you>/aegis-core
+#
+# See the WS2-R runbook (docs/runbooks/) for the end-to-end bring-up.
+resources:
+  - ../talos
+
+images:
+  - name: aegis-core
+    newName: ghcr.io/binhsu/aegis-core

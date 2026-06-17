@@ -29,6 +29,21 @@ k8s/
 Application CR at `k8s/overlays/prod`, renders the kustomization, and
 syncs the result into the `aegis-core` namespace.
 
+## Running it on-prem (no AWS, no platform tier)
+
+The `overlays/talos` overlay runs the same stack on a local Talos cluster with
+on-prem substitutes — MinIO for S3, SPIRE for IRSA — wired through the same
+provider-neutral base (`components/onprem-binding`). To bring the whole thing up
+from a clean clone on your own machine:
+
+```sh
+./quickstart.sh
+```
+
+See **[docs/runbooks/ws2r-onprem-quickstart.md](docs/runbooks/ws2r-onprem-quickstart.md)**
+for the end-to-end walkthrough (default Talos-on-Docker, plus kind/k3d
+adaptation), the one image prerequisite, and troubleshooting.
+
 ## Image tags
 
 The three image-bearing manifests (`aegis-core-gateway/rollout.yaml`,

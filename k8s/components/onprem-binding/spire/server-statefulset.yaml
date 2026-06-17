@@ -52,9 +52,10 @@ spec:
             runAsUser: 1000
             runAsGroup: 1000
             allowPrivilegeEscalation: false
-            # readOnlyRootFilesystem: the server writes keys + sqlite3 to /run/spire/data
-            # (emptyDir) and a socket to /run/spire/server-sockets (emptyDir).
-            # The root fs itself is read-only; all writable paths are emptyDirs.
+            # readOnlyRootFilesystem: the server writes keys + sqlite3 to
+            # /run/spire/data (a PVC, see volumeClaimTemplates) and a socket to
+            # /run/spire/server-sockets (emptyDir). The root fs itself is
+            # read-only; all writable paths are mounted volumes.
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
@@ -153,7 +154,25 @@ spec:
         # Shared socket dir between spire-server and oidc-discovery-provider
         - name: server-sockets
           emptyDir: {}
-        # emptyDir for data (sqlite3 + keys). LOCAL-DEV: data is lost on pod
-        # restart; agents re-attest automatically. For persistence use a PVC.
-        - name: spire-data
-          emptyDir: {}
+        # spire-data (sqlite3 datastore + signing keys) is a PVC — see
+        # volumeClaimTemplates below.
+  # spire-data PVC (WS2-R gap #4): persist the SQLite datastore + the server's
+  # signing keys so attestation and issued SVIDs survive a pod or cluster
+  # restart (emptyDir lost them, forcing every agent + the engine to re-attest
+  # and breaking "the stack comes back after a restart"). storageClassName is
+  # intentionally omitted to bind the cluster's DEFAULT StorageClass — Talos
+  # gets one when the quickstart installs local-path-provisioner; kind ("standard")
+  # and k3d ("local-path") already ship a default, so this is portable. Tiny:
+  # SQLite + keys are well under 1Gi.
+  volumeClaimTemplates:
+    - metadata:
+        name: spire-data
+        labels:
+          app.kubernetes.io/name: spire-server
+          app.kubernetes.io/part-of: spire
+          app.kubernetes.io/managed-by: argocd
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

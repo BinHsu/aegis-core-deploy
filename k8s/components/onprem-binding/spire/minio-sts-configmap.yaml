@@ -6,21 +6,24 @@
 # config — not predictable and not settable — so it must be discovered once per
 # deployment and supplied here.
 #
-# Discover it on first deploy:
+# AUTO-POPULATED (WS2-R, gap #1). The value below is a PLACEHOLDER — the
+# minio-bootstrap Job's `populate-sts-arn` step discovers the real ARN from
+# MinIO's startup log and patches it in (minio/bootstrap-job.yaml +
+# minio/bootstrap-rbac.yaml). No operator step. The engine/seed sts-exchange
+# init-container reads role_arn from this ConfigMap mounted as a FILE and waits
+# until the placeholder is replaced — so it self-heals once the bootstrap lands
+# the ARN, with no pod restart and no manual ordering. (env-via-configMapKeyRef
+# would freeze the placeholder at pod start; a mounted file updates in place.)
+#
+# Manual fallback (only if you disable the bootstrap step or are debugging it):
 #   kubectl -n aegis-core logs deploy/minio | grep -i 'rolearn'
-#   (or: mc idp openid info <alias> _ , which prints "RoleARN: arn:minio:iam:::role/...")
-# then set role_arn below and re-sync; the engine model-fetch init-container
-# reads it via configMapKeyRef.
+#   kubectl -n aegis-core patch configmap minio-sts --type merge \
+#     -p '{"data":{"role_arn":"arn:minio:iam:::role/<hash>"}}'
 #
 # Why a ConfigMap and not a root-credential lookup in the engine init-container:
 # WS2-3's whole point is to remove static root creds from the engine path (the
 # IRSA-fidelity win). The engine reads only this ARN + its own JWT-SVID; it never
 # sees MINIO_ROOT_USER/PASSWORD.
-#
-# Productionization (deferred): the MinIO bootstrap Job — which legitimately
-# holds root creds — auto-populates this ConfigMap via a kubectl patch (needs
-# configmaps RBAC). Left manual at local-dev scale; this is the documented
-# compromise, in the ADR-16/17 style.
 apiVersion: v1
 kind: ConfigMap
 metadata:

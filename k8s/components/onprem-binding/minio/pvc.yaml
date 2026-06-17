@@ -1,0 +1,23 @@
+# MinIO data volume (WS2-R gap #4). Persists the model bucket + MinIO's IAM
+# config across pod/cluster restarts (see minio/deployment.yaml for why).
+#
+# storageClassName is omitted on purpose — bind the cluster's DEFAULT
+# StorageClass. Talos gets one when the quickstart installs
+# local-path-provisioner; kind ("standard") and k3d ("local-path") already ship
+# a default, so this is portable across the supported substrates without edits.
+# 1Gi comfortably holds the one ~75 MB model object + .minio.sys metadata.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: minio
+    app.kubernetes.io/part-of: aegis-core
+    app.kubernetes.io/component: object-store
+    app.kubernetes.io/managed-by: argocd
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
