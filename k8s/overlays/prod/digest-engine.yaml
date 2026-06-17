@@ -1,0 +1,5 @@
+# Engine digest pin (ADR-10/14). JSON6902 patch FILE, promoted from staging.
+# The seed Job carries the SAME digest (ADR-14, validate.yml Guard C).
+- op: replace
+  path: /spec/template/spec/containers/0/image
+  value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000

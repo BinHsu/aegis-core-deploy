@@ -1,0 +1,22 @@
+# Model-store binding for the AWS target (WS3, ADR-18 AWS twin).
+#
+# The engine's /models CAS store is delivered from an S3 bucket by the
+# `model-fetch` init-container (see kustomization.yaml patches). On-prem the
+# equivalent source is MinIO (components/onprem-binding); the engine itself has
+# no S3/object client — substitution is entirely at the volume-delivery layer.
+#
+# `bucket` is a PLACEHOLDER, set per-environment at deploy time from the
+# Terraform model-bucket output (the bucket name is account/region-specific and
+# is not committed to this public repo — same posture as the ECR account and
+# ACM cert ARN, which the platform injects). Mirrors the onprem-binding's
+# initial `REPLACE_WITH_…` placeholder pattern.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aegis-core-model-store
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: aegis-core-engine
+    app.kubernetes.io/part-of: aegis-core
+data:
+  bucket: "REPLACE_WITH_MODEL_BUCKET"

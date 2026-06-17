@@ -1,0 +1,8 @@
+# Gateway digest pin (ADR-10/14 "build once, promote by digest"). JSON6902
+# patch FILE (not inline) so the aegis-core release CI can mechanically set the
+# value via `yq -i '.[0].value = "aegis-core@sha256:<digest>"'` after each push.
+# Placeholder until the CI bump runs; validate.yml enforces the @sha256 SHAPE.
+# The overlay replacement splices the platform-injected registry in front.
+- op: replace
+  path: /spec/template/spec/containers/0/image
+  value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000

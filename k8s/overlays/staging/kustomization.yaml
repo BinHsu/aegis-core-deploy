@@ -105,25 +105,20 @@ patches:
     target:
       kind: Rollout
       name: aegis-core-engine
-  # --- digest pins ---
-  - patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  # --- digest pins (JSON6902 patch FILES, ADR-10/14) ---
+  # In files (not inline) so the aegis-core release CI bumps them mechanically
+  # via yq after each ECR push (release-staging-image.yml bump-image-tag job).
+  # The base image fields stay neutral (`aegis-core`); these patches own the
+  # per-env digest.
+  - path: digest-gateway.yaml
     target:
       kind: Rollout
       name: aegis-core-gateway
-  - patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - path: digest-engine.yaml
     target:
       kind: Rollout
       name: aegis-core-engine
-  - patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - path: digest-seed.yaml
     target:
       kind: Job
       name: aegis-core-engine-seed

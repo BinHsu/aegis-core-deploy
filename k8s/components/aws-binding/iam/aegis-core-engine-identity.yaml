@@ -39,7 +39,11 @@ metadata:
 spec:
   parameters:
     serviceAccountName: aegis-core-engine
-    # policyArns is intentionally a SKELETON — added when the engine gains
-    # concrete AWS API surface (e.g. S3 model streaming per aegis-core
-    # ADR-0026). The role provisioning + trust subject are what issue #6's
-    # gate validates first.
+    # policyArns is a SKELETON in this repo. WS3 gives the engine its first
+    # concrete AWS API surface: S3 read on the model bucket (s3:GetObject +
+    # s3:ListBucket) for the model-fetch init-container (see
+    # ../kustomization.yaml + ../model-store-configmap.yaml). That managed
+    # policy is created by Terraform (Phase B) and its ARN injected here by the
+    # platform ApplicationSet — the ARN carries the account id and is not
+    # committed to this public repo (same posture as the ECR account + ACM cert
+    # ARN). Left empty here on purpose.
