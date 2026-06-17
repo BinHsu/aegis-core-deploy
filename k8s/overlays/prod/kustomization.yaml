@@ -47,6 +47,21 @@ components:
 # ⚠️ E2E PENDING platform bootstrap — confirm the injected registry
 # prefix resolves all three images at first sync.
 replacements:
+  # external-dns latency routing (WS3-R): rewrite the gateway Ingress's
+  # set-identifier + aws-region placeholders with the platform-injected region
+  # (aegis.binhsu.org/region, on the gateway Rollout). Mirrors greeter. Standalone
+  # build uses the base literal "local".
+  - source:
+      kind: Rollout
+      name: aegis-core-gateway
+      fieldPath: metadata.annotations.[aegis.binhsu.org/region]
+    targets:
+      - select:
+          kind: Ingress
+          name: aegis-core-gateway
+        fieldPaths:
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/set-identifier]
+          - metadata.annotations.[external-dns.alpha.kubernetes.io/aws-region]
   # Gateway Rollout — container name: gateway
   - source:
       kind: Rollout

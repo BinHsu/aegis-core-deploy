@@ -17,12 +17,10 @@ metadata:
     alb.ingress.kubernetes.io/ssl-redirect: "443"
     alb.ingress.kubernetes.io/backend-protocol: HTTP
     # ACM certificate-arn is INJECTED by the platform ApplicationSet at sync
-    # time (aegis-platform ADR-07 ⑥ / account-ID hide) — the ARN embeds an AWS
-    # account ID, so it no longer lives in this public repo. The platform
-    # supplies the region-correct, cluster-account cert from its gitignored
-    # registries map (ingress_cert.cert_arn). ⚠️ implemented, E2E PENDING
-    # platform bootstrap — and per-region cert correctness is a bootstrap
-    # refinement (one map value is single-region only).
+    # time (account-ID hide). WS3-R: the platform now provisions a PER-REGION
+    # cert (regional acm.tf) and injects that region's ARN automatically — so
+    # multi-region is correct (each region's ALB gets its own-region cert), no
+    # longer the old single-map-value limitation.
     # Healthcheck path for ALB target group probing.
     alb.ingress.kubernetes.io/healthcheck-path: /healthz
     alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
@@ -31,6 +29,17 @@ metadata:
     # ALB traffic-router plugin (C-5a). Enabling the feature now
     # costs nothing; the plugin will populate weights when active.
     alb.ingress.kubernetes.io/actions.weighted-routing: ""
+    # external-dns LATENCY routing (WS3-R, ADR-05; mirrors greeter's pattern).
+    # Two regions serve the SAME host (spec.rules host below) as distinct
+    # latency-routed Route 53 records; Route 53 returns the nearest healthy
+    # region. set-identifier + aws-region are PLACEHOLDERS ("local"), rewritten
+    # per-region by the staging/prod overlay `replacements` sourcing
+    # aegis.binhsu.org/region (injected by the platform ApplicationSet). Each
+    # region's external-dns owns only its own record (txtOwnerId = cluster name),
+    # so the two coexist. evaluate-target-health gives automatic failover.
+    external-dns.alpha.kubernetes.io/set-identifier: "local"
+    external-dns.alpha.kubernetes.io/aws-region: "local"
+    external-dns.alpha.kubernetes.io/aws-evaluate-target-health: "true"
 spec:
   rules:
     # DNS host. This component default is the STAGING hostname; the prod
