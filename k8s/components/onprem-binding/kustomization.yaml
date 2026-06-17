@@ -158,7 +158,17 @@ patches:
                 done
                 echo "role_arn ready"
                 JWT="$(cat /run/spire/svid/jwt_svid.token)"
-                RESP="$(curl -sS -X POST "http://minio:9000/?Action=AssumeRoleWithWebIdentity&Version=2011-06-15&WebIdentityToken=${JWT}&RoleArn=${ROLE_ARN}&DurationSeconds=900")"
+                # POST body (not URL query) so the JWT-SVID + RoleArn never land
+                # in MinIO's access log / any proxy log (#9). MinIO's STS accepts
+                # the AWS-compatible application/x-www-form-urlencoded body.
+                # --retry* rides out MinIO-still-starting (ECONNREFUSED / 5xx).
+                RESP="$(curl -sS -X POST "http://minio:9000/" \
+                  --retry 5 --retry-delay 2 --retry-connrefused --max-time 20 \
+                  --data-urlencode "Action=AssumeRoleWithWebIdentity" \
+                  --data-urlencode "Version=2011-06-15" \
+                  --data-urlencode "WebIdentityToken=${JWT}" \
+                  --data-urlencode "RoleArn=${ROLE_ARN}" \
+                  --data-urlencode "DurationSeconds=900")"
                 FLAT="$(echo "$RESP" | tr -d '\n')"
                 AK="$(echo "$FLAT" | sed -n 's:.*<AccessKeyId>\([^<]*\)</AccessKeyId>.*:\1:p')"
                 SK="$(echo "$FLAT" | sed -n 's:.*<SecretAccessKey>\([^<]*\)</SecretAccessKey>.*:\1:p')"
@@ -329,7 +339,17 @@ patches:
                 done
                 echo "role_arn ready"
                 JWT="$(cat /run/spire/svid/jwt_svid.token)"
-                RESP="$(curl -sS -X POST "http://minio:9000/?Action=AssumeRoleWithWebIdentity&Version=2011-06-15&WebIdentityToken=${JWT}&RoleArn=${ROLE_ARN}&DurationSeconds=900")"
+                # POST body (not URL query) so the JWT-SVID + RoleArn never land
+                # in MinIO's access log / any proxy log (#9). MinIO's STS accepts
+                # the AWS-compatible application/x-www-form-urlencoded body.
+                # --retry* rides out MinIO-still-starting (ECONNREFUSED / 5xx).
+                RESP="$(curl -sS -X POST "http://minio:9000/" \
+                  --retry 5 --retry-delay 2 --retry-connrefused --max-time 20 \
+                  --data-urlencode "Action=AssumeRoleWithWebIdentity" \
+                  --data-urlencode "Version=2011-06-15" \
+                  --data-urlencode "WebIdentityToken=${JWT}" \
+                  --data-urlencode "RoleArn=${ROLE_ARN}" \
+                  --data-urlencode "DurationSeconds=900")"
                 FLAT="$(echo "$RESP" | tr -d '\n')"
                 AK="$(echo "$FLAT" | sed -n 's:.*<AccessKeyId>\([^<]*\)</AccessKeyId>.*:\1:p')"
                 SK="$(echo "$FLAT" | sed -n 's:.*<SecretAccessKey>\([^<]*\)</SecretAccessKey>.*:\1:p')"
@@ -521,8 +541,8 @@ patches:
   # MinIO bootstrap-job: add a policy-creation step.
   # We append a second init-container to the existing minio-bootstrap Job
   # that creates the aegis-models-readonly IAM policy on MinIO after the
-  # bucket is seeded. This is idempotent (mc admin policy create fails
-  # gracefully if the policy exists).
+  # bucket is seeded. Idempotent via an existence check (mc admin policy info)
+  # — a real create failure is NOT masked.
   # =========================================================================
   - target:
       group: batch
@@ -543,9 +563,16 @@ patches:
               until mc alias set obj http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
                 echo "waiting for MinIO..."; sleep 2
               done
-              # Create the read-only policy (idempotent)
-              mc admin policy create obj aegis-models-readonly /policy/aegis-models-readonly.json \
-                || echo "policy already exists, continuing"
+              # Create the read-only policy. Gate on existence (#9) — `|| echo`
+              # would have swallowed auth/connectivity/missing-file errors as if
+              # they were "already exists", leaving MinIO misconfigured but the
+              # Job green. Only a genuine "already there" is the benign skip; any
+              # other create failure propagates under `set -eu`.
+              if mc admin policy info obj aegis-models-readonly >/dev/null 2>&1; then
+                echo "policy aegis-models-readonly already exists"
+              else
+                mc admin policy create obj aegis-models-readonly /policy/aegis-models-readonly.json
+              fi
               echo "MinIO OIDC policy setup complete"
           env:
             - name: MINIO_ROOT_USER
