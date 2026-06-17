@@ -1,0 +1,5 @@
+# Seed Job digest pin (ADR-14: seed == engine digest). JSON6902 patch FILE —
+# CI sets this to the SAME value as digest-engine.yaml after each push.
+- op: replace
+  path: /spec/template/spec/containers/0/image
+  value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000

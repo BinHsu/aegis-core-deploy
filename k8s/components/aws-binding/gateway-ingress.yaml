@@ -33,12 +33,11 @@ metadata:
     alb.ingress.kubernetes.io/actions.weighted-routing: ""
 spec:
   rules:
-    # DNS — `aegis-api.staging.binhsu.org` is the intended hostname.
-    # Route53 record creation is ldz-side; C-1 assumes it will be
-    # provisioned alongside the ACM cert above. ArgoCD will surface
-    # the Ingress resource as pending-validation until DNS + cert
-    # are in place; this is expected behaviour on first bring-up,
-    # not a failure of this manifest.
+    # DNS host. This component default is the STAGING hostname; the prod
+    # overlay patches it to `aegis-api.binhsu.org` (WS3, ADR-19 real-domain
+    # decision — binhsu.org). Route53 record + ACM cert are platform-side;
+    # ArgoCD surfaces the Ingress as pending-validation until DNS + cert are
+    # in place — expected on first bring-up, not a manifest failure.
     - host: aegis-api.staging.binhsu.org
       http:
         paths:

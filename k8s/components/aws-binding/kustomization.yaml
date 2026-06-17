@@ -22,6 +22,8 @@ resources:
   - gateway-ingress.yaml
   - gateway-servicemonitor.yaml
   - engine-servicemonitor.yaml
+  - model-store-configmap.yaml
+  - gateway-oidc-configmap.yaml
   - iam
 
 # Mirror the base's managed-by label onto these component resources — the
@@ -36,6 +38,12 @@ patches:
   # IRSA marker annotation — moved off the neutral base SA. Re-added here so
   # the platform ApplicationSet can inject eks.amazonaws.com/role-arn on the
   # EKS targets. The annotations map must exist as the JSON-patch target.
+  #
+  # The engine's IRSA role needs S3 read on the model bucket (s3:GetObject +
+  # s3:ListBucket). That is a MANAGED policy created by Terraform (Phase B) and
+  # attached via the WorkloadIdentity Claim's policyArns, which the platform
+  # injects (the ARN carries the account id and is not committed here — same
+  # posture as the ECR account and ACM cert ARN). See iam/aegis-core-engine-identity.yaml.
   - target:
       kind: ServiceAccount
       name: aegis-core-engine
@@ -47,3 +55,170 @@ patches:
         namespace: aegis-core
         annotations:
           aegis.binhsu.org/irsa-role-arn: platform-injected
+
+  # =========================================================================
+  # Engine Rollout: AWS model delivery (WS3 — the AWS twin of onprem-binding's
+  # WS2-3 chain). IRSA collapses the on-prem three-step chain (SPIRE JWT-SVID →
+  # MinIO STS → mc mirror) to ONE init-container: the EKS pod-identity webhook
+  # injects a projected web-identity token + AWS_ROLE_ARN, and the AWS SDK does
+  # the AssumeRoleWithWebIdentity exchange transparently. So a single aws-cli
+  # `s3 sync` mirrors the model bucket into the /models CAS store.
+  #
+  # The init mounts `models` read-WRITE to populate it; the engine container
+  # keeps its read-only mount. `models` and `tmp` already exist on the base pod
+  # (tmp gives the cli a writable HOME under readOnlyRootFilesystem). No new
+  # volumes. automountServiceAccountToken:false on the base is fine — the IRSA
+  # webhook adds its own `aws-iam-token` projected volume regardless.
+  #
+  # JSON6902 (not strategic merge) because kustomize has no openapi schema for
+  # the Rollout CRD. Image digest-pinned (validate.yml Guard A).
+  # =========================================================================
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: Rollout
+      name: aegis-core-engine
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers
+        value:
+          - name: model-fetch
+            image: public.ecr.aws/aws-cli/aws-cli@sha256:017ee8e2aa180f47597daa31219991fbea9377645e55f8070aeaadb156573807
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -eu
+                echo "syncing model store from s3://${AEGIS_MODEL_BUCKET} ..."
+                aws s3 sync "s3://${AEGIS_MODEL_BUCKET}" /models
+                # Gate (mirrors onprem mc-stat): a misconfigured/empty bucket
+                # must fail LOUD here, not silently let the engine crashloop on
+                # a missing model. The engine SHA-verifies each model at startup,
+                # so a non-empty /models is the right delivery-layer assertion.
+                [ -n "$(ls -A /models 2>/dev/null)" ] || { echo "ERROR: model bucket empty / sync delivered nothing" >&2; exit 1; }
+                echo "model CAS populated."
+            env:
+              # aws-cli needs a writable HOME (creds cache) under
+              # readOnlyRootFilesystem — point it at the tmp emptyDir.
+              - name: HOME
+                value: /tmp
+              - name: AEGIS_MODEL_BUCKET
+                valueFrom:
+                  configMapKeyRef:
+                    name: aegis-core-model-store
+                    key: bucket
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "128Mi"
+              limits:
+                cpu: "1000m"
+                memory: "512Mi"
+            volumeMounts:
+              - name: models
+                mountPath: /models
+              - name: tmp
+                mountPath: /tmp
+
+  # =========================================================================
+  # Gateway Rollout: AWS provider mode + Cognito OIDC (WS3, ADR-19).
+  # DEPLOY_MODE=cloud flips the Go gateway onto the OIDCProvider (RS256 Bearer
+  # validation) and the cloud tracing exporter. The three Cognito values come
+  # from the gateway-oidc ConfigMap (deploy-injected placeholders). The auth
+  # code is already provider-neutral — this binding is pure data injection.
+  # =========================================================================
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: Rollout
+      name: aegis-core-gateway
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DEPLOY_MODE
+          value: cloud
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: AEGIS_COGNITO_ISSUER
+          valueFrom:
+            configMapKeyRef:
+              name: aegis-core-gateway-oidc
+              key: issuer
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: AEGIS_COGNITO_AUDIENCE
+          valueFrom:
+            configMapKeyRef:
+              name: aegis-core-gateway-oidc
+              key: audience
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: AEGIS_COGNITO_JWKS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: aegis-core-gateway-oidc
+              key: jwksUrl
+
+  # =========================================================================
+  # Seed Job: same single model-fetch init-container (the seed Job loads
+  # bge-m3 from the same /models CAS — see seed-job.yaml). The Job's main
+  # container mounts models read-only; the init mounts it read-write.
+  # =========================================================================
+  - target:
+      group: batch
+      version: v1
+      kind: Job
+      name: aegis-core-engine-seed
+    patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers
+        value:
+          - name: model-fetch
+            image: public.ecr.aws/aws-cli/aws-cli@sha256:017ee8e2aa180f47597daa31219991fbea9377645e55f8070aeaadb156573807
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -eu
+                echo "syncing model store from s3://${AEGIS_MODEL_BUCKET} ..."
+                aws s3 sync "s3://${AEGIS_MODEL_BUCKET}" /models
+                [ -n "$(ls -A /models 2>/dev/null)" ] || { echo "ERROR: model bucket empty / sync delivered nothing" >&2; exit 1; }
+                echo "model CAS populated."
+            env:
+              - name: HOME
+                value: /tmp
+              - name: AEGIS_MODEL_BUCKET
+                valueFrom:
+                  configMapKeyRef:
+                    name: aegis-core-model-store
+                    key: bucket
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65532
+              runAsGroup: 65532
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "128Mi"
+              limits:
+                cpu: "1000m"
+                memory: "512Mi"
+            volumeMounts:
+              - name: models
+                mountPath: /models
+              - name: tmp
+                mountPath: /tmp

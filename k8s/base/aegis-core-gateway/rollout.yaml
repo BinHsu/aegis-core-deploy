@@ -102,8 +102,13 @@ spec:
               containerPort: 8081
               protocol: TCP
           env:
-            - name: AEGIS_DEPLOY_MODE
-              value: CLOUD
+            # DEPLOY_MODE is NOT set in the neutral base (ADR-16): it is the
+            # provider-mode switch the Go gateway reads (cmd/gateway/main.go —
+            # tracing exporter + auth provider). Each binding injects it:
+            # aws-binding → DEPLOY_MODE=cloud (+ Cognito OIDC env); onprem-binding
+            # → DEPLOY_MODE=local. (The prior `AEGIS_DEPLOY_MODE: CLOUD` here was
+            # both non-neutral AND a misname — the Go code reads DEPLOY_MODE, so
+            # it was dead config; removed in WS3.)
             - name: AEGIS_ENGINE_ADDR
               # Headless Service DNS — gRPC client-side round_robin
               # resolver walks all backing pod IPs (ADR-0017).

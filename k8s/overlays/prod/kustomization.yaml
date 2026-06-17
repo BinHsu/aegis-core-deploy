@@ -106,24 +106,27 @@ replacements:
 # (ADR-14 atomic promotion). Placeholders until the WS3 ECR pipeline + promotion
 # flow set them — see staging overlay note on the WS3-deferred CI bump.
 patches:
+  # Prod hostname (WS3, ADR-19). The aws-binding component ships the staging
+  # host as its default; prod serves on the apex sub-domain aegis-api.binhsu.org.
   - patch: |-
       - op: replace
-        path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        path: /spec/rules/0/host
+        value: aegis-api.binhsu.org
+    target:
+      kind: Ingress
+      name: aegis-core-gateway
+  # --- digest pins (JSON6902 patch FILES, ADR-10/14) ---
+  # In files (not inline) so the promotion PR bumps them mechanically via yq,
+  # gateway + engine + seed in one atomic commit (ADR-14). Base stays neutral.
+  - path: digest-gateway.yaml
     target:
       kind: Rollout
       name: aegis-core-gateway
-  - patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - path: digest-engine.yaml
     target:
       kind: Rollout
       name: aegis-core-engine
-  - patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/image
-        value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - path: digest-seed.yaml
     target:
       kind: Job
       name: aegis-core-engine-seed

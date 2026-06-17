@@ -1,0 +1,8 @@
+# Gateway digest pin (ADR-10/14). JSON6902 patch FILE. Prod digests are
+# PROMOTED from staging by a promotion PR that copies the staging-verified
+# digest here (ADR-14 atomic promotion: gateway + engine move together or
+# neither). Placeholder until the first promotion; validate.yml enforces the
+# @sha256 SHAPE and (on prod PRs) the move-together rule.
+- op: replace
+  path: /spec/template/spec/containers/0/image
+  value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000

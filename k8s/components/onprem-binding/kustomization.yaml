@@ -611,3 +611,23 @@ patches:
           name: policy
           configMap:
             name: minio-spire-policy
+
+  # =========================================================================
+  # Gateway Rollout: on-prem provider mode (WS3 neutrality fix). The neutral
+  # base no longer carries a deploy mode (ADR-16) — each binding injects it.
+  # On-prem sets DEPLOY_MODE=local so the Go gateway uses the NoOp auth
+  # provider + stdout tracing exporter (cmd/gateway/main.go). Without this the
+  # gateway dies at tracing.Init ("DEPLOY_MODE empty"). Gateway auth on-prem
+  # (Dex/Keycloak OIDC) stays carry-forward, OFF the WS3 critical path.
+  # =========================================================================
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: Rollout
+      name: aegis-core-gateway
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DEPLOY_MODE
+          value: local

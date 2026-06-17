@@ -1,0 +1,29 @@
+# Gateway OIDC binding for the AWS target (WS3, ADR-19).
+#
+# The Go gateway's auth provider (gateway_go/internal/auth/oidc_provider.go) is
+# already production-grade AND provider-neutral: in DEPLOY_MODE=cloud it
+# validates an RS256 Bearer JWT against {issuer, audience, jwksUrl}. Those three
+# values are the ONLY provider-specific inputs — on AWS they point at Cognito,
+# on-prem they would point at Dex (the same OIDC discovery shape). So Cognito is
+# bound here as data, never in the neutral base.
+#
+# Values are PLACEHOLDERS, set per-environment at deploy time from the Terraform
+# Cognito outputs (a staging user pool already exists, landing-zone-owned):
+#   issuer  = https://cognito-idp.<region>.amazonaws.com/<user-pool-id>
+#   jwksUrl = <issuer>/.well-known/jwks.json   (the gateway derives this from
+#             issuer if left blank — kept explicit here for clarity)
+#   audience = <app-client-id>
+# Same posture as the model bucket + ACM cert ARN: account/env-specific, not
+# committed to this public repo.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aegis-core-gateway-oidc
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: aegis-core-gateway
+    app.kubernetes.io/part-of: aegis-core
+data:
+  issuer: "REPLACE_WITH_COGNITO_ISSUER"
+  audience: "REPLACE_WITH_COGNITO_APP_CLIENT_ID"
+  jwksUrl: "REPLACE_WITH_COGNITO_JWKS_URL"
