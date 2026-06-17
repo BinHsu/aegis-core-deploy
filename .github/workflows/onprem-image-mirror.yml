@@ -1,0 +1,82 @@
+name: Mirror on-prem images to single repo
+
+# WS2-R (gap #2): assemble the single-repo image source the on-prem overlays
+# expect. aegis-core CI publishes the engine + gateway as TWO GHCR packages
+# (aegis-core-engine, aegis-core-gateway); the manifests use the single-repo
+# model (one repo, images by digest — the ECR shape). This workflow mirrors both
+# digests into ghcr.io/<owner>/aegis-core using the built-in GITHUB_TOKEN — no
+# PAT to paste, and because this repo is public the resulting package inherits
+# public visibility (no manual visibility change).
+#
+# Digest-preserving: we pull-and-recreate by digest, then assert the original
+# digest resolves in the target repo (that is what the overlays pin). Re-runnable
+# whenever the pinned digests in k8s/overlays/talos/kustomization.yaml change.
+#
+# Long-term: fold a single-repo push into aegis-core's release-onprem-image.yml
+# so this mirror step is unnecessary. This workflow is the interim bridge.
+
+on:
+  workflow_dispatch:
+    inputs:
+      engine_digest:
+        description: "Engine image digest (sha256:...) — must match overlays/talos"
+        required: true
+        default: "sha256:551744a9e9d9861c8f27964af1493026f871bca8431d6e04d3fb15763a8f7c05"
+      gateway_digest:
+        description: "Gateway image digest (sha256:...) — must match overlays/talos"
+        required: true
+        default: "sha256:e7d514503775729328e56be3eeea989535e2f666e4299f13374d7c293fb8ba5b"
+      target_repo:
+        description: "Single target repo"
+        required: true
+        default: "ghcr.io/binhsu/aegis-core"
+      source_engine_repo:
+        description: "Source engine package"
+        required: true
+        default: "ghcr.io/binhsu/aegis-core-engine"
+      source_gateway_repo:
+        description: "Source gateway package"
+        required: true
+        default: "ghcr.io/binhsu/aegis-core-gateway"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GHCR (GITHUB_TOKEN)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Mirror engine + gateway digests into the single repo
+        env:
+          TARGET: ${{ inputs.target_repo }}
+          ENG_SRC: ${{ inputs.source_engine_repo }}
+          ENG_DIG: ${{ inputs.engine_digest }}
+          GW_SRC: ${{ inputs.source_gateway_repo }}
+          GW_DIG: ${{ inputs.gateway_digest }}
+        run: |
+          set -euo pipefail
+          # imagetools create copies the source manifest + blobs into the target
+          # repo. The tag is just a handle; the overlays pin by digest, and the
+          # original manifest digest is preserved in the target repo (asserted
+          # in the verify step).
+          docker buildx imagetools create -t "${TARGET}:onprem-engine"  "${ENG_SRC}@${ENG_DIG}"
+          docker buildx imagetools create -t "${TARGET}:onprem-gateway" "${GW_SRC}@${GW_DIG}"
+
+      - name: Verify the pinned digests resolve in the target repo
+        env:
+          TARGET: ${{ inputs.target_repo }}
+          ENG_DIG: ${{ inputs.engine_digest }}
+          GW_DIG: ${{ inputs.gateway_digest }}
+        run: |
+          set -euo pipefail
+          for d in "${ENG_DIG}" "${GW_DIG}"; do
+            echo "== ${TARGET}@${d} =="
+            docker buildx imagetools inspect "${TARGET}@${d}" >/dev/null \
+              || { echo "::error::digest ${d} does not resolve in ${TARGET} — copy did not preserve it"; exit 1; }
+            echo "ok"
+          done
+          echo "Both digests resolve in ${TARGET}. The talos overlays can now pull from the single repo."
