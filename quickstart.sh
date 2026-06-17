@@ -81,12 +81,26 @@ kubectl apply -f "https://github.com/kyverno/kyverno/releases/download/${KYVERNO
 kubectl -n argo-rollouts rollout status deploy/argo-rollouts --timeout=180s
 
 # --- 5. apply the stack ------------------------------------------------------
-log "5/7 apply $OVERLAY (registry: $REGISTRY)"
-# Override the image repo without editing the overlay file, if REGISTRY differs.
-if [ "$REGISTRY" != "ghcr.io/binhsu/aegis-core" ]; then
-  ( cd "$OVERLAY" && kustomize edit set image "aegis-core=${REGISTRY}" )
+log "5/7 apply (registry: $REGISTRY)"
+if [ "$REGISTRY" = "ghcr.io/binhsu/aegis-core" ]; then
+  # Default: the committed standalone overlay (already points at this registry).
+  kubectl apply -k "$OVERLAY"
+else
+  # Custom registry: inject it WITHOUT mutating the tracked overlay — render a
+  # throwaway kustomization that layers the images transformer over talos.
+  TMP_OVERLAY="$(mktemp -d)"
+  trap 'rm -rf "$TMP_OVERLAY"' EXIT
+  cat > "$TMP_OVERLAY/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - $REPO_ROOT/k8s/overlays/talos
+images:
+  - name: aegis-core
+    newName: $REGISTRY
+EOF
+  kubectl apply -k "$TMP_OVERLAY"
 fi
-kubectl apply -k "$OVERLAY"
 
 # --- 6. wait for the stack ---------------------------------------------------
 log "6/7 waiting for the stack to converge"
@@ -94,10 +108,13 @@ echo "spire-server..."; kubectl -n spire-system rollout status statefulset/spire
 echo "minio...";        kubectl -n aegis-core   rollout status deploy/minio --timeout=180s
 echo "minio-bootstrap (seeds the model + auto-populates the STS Role ARN)..."
 kubectl -n aegis-core wait --for=condition=complete job/minio-bootstrap --timeout=300s
-echo "engine + gateway Rollouts..."
-kubectl -n aegis-core argo rollouts status aegis-core-engine  --timeout=300s 2>/dev/null \
-  || kubectl -n aegis-core rollout status deploy/aegis-core-engine --timeout=300s 2>/dev/null \
-  || echo "  (check 'kubectl -n aegis-core get rollout,pods' — engine may still be pulling its init images)"
+echo "engine pod (Argo Rollouts manages it; wait on the pod so no plugin is needed)..."
+ENGINE_OK=1
+if ! kubectl -n aegis-core wait --for=condition=Ready pod \
+       -l app.kubernetes.io/name=aegis-core-engine --timeout=300s; then
+  ENGINE_OK=0
+  printf '\n\033[1;33mWARNING:\033[0m engine pod not Ready within 5m — diagnostics below.\n'
+fi
 
 # --- 7. verify ---------------------------------------------------------------
 log "7/7 verify"
@@ -106,13 +123,21 @@ kubectl -n aegis-core get configmap minio-sts -o jsonpath='{.data.role_arn}{"\n"
 echo
 echo "engine pod:"
 kubectl -n aegis-core get pods -l app.kubernetes.io/name=aegis-core-engine
-cat <<EOF
 
-Done. The full chain is live when the engine pod is 1/1 Ready:
-  SPIRE attests the engine SA -> JWT-SVID -> MinIO STS AssumeRoleWithWebIdentity
-  -> scoped temp creds -> model mirrored into /models -> engine serves gRPC :50051.
+cat <<EOF
 
 Inspect:   kubectl -n aegis-core get pods,job,cm,pvc
 Engine log: kubectl -n aegis-core logs <engine-pod> -c engine
 Tear down: talosctl cluster destroy --provisioner docker --name $CLUSTER
 EOF
+
+if [ "$ENGINE_OK" = 1 ]; then
+  cat <<'EOF'
+
+Done — the full chain is live (engine pod 1/1 Ready):
+  SPIRE attests the engine SA -> JWT-SVID -> MinIO STS AssumeRoleWithWebIdentity
+  -> scoped temp creds -> model mirrored into /models -> engine serves gRPC :50051.
+EOF
+else
+  die "engine did not become Ready — inspect the pods/logs above (see the runbook's Troubleshooting)."
+fi

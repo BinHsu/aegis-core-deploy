@@ -41,17 +41,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
-  # Read the current ConfigMap and patch the discovered ARN into it. Scoped to
-  # the single `minio-sts` ConfigMap by name (get/list are namespace-wide
-  # because `list` cannot be name-restricted, but patch is the privileged verb
-  # and it is name-scoped).
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list"]
+  # Patch the discovered ARN into the one ConfigMap. The populate step only
+  # `kubectl patch`es it, so get+patch on the single `minio-sts` object by name
+  # is sufficient — no namespace-wide ConfigMap read/list.
   - apiGroups: [""]
     resources: ["configmaps"]
     resourceNames: ["minio-sts"]
-    verbs: ["patch"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
