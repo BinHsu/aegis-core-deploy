@@ -96,10 +96,15 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
-        # Ephemeral. Object durability is not a goal here; if the pod restarts,
-        # the bootstrap Job re-seeds the bucket (it is idempotent). On a real
-        # on-prem deployment this becomes a PVC.
+        # data (WS2-R gap #4): a PVC, so the bucket objects AND MinIO's IAM
+        # config (the aegis-models-readonly policy + the derived OIDC Role ARN,
+        # stored under .minio.sys) survive a restart. With emptyDir, a MinIO
+        # restart dropped the bucket and the bootstrap Job — a run-once Job —
+        # would not re-seed, breaking the engine after any restart. The
+        # `strategy: Recreate` above is required for an RWO PVC (no two pods
+        # contending the volume during a rollout).
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: minio-data
         - name: tmp
           emptyDir: {}

@@ -24,7 +24,11 @@ spec:
         app.kubernetes.io/component: object-store-seed
     spec:
       restartPolicy: OnFailure
-      automountServiceAccountToken: false
+      # The populate-sts-arn container (below) needs the SA token to read MinIO's
+      # logs and patch the minio-sts ConfigMap, so automount is on and the Job
+      # runs as the least-privilege minio-bootstrap SA (bootstrap-rbac.yaml).
+      serviceAccountName: minio-bootstrap
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -119,6 +123,52 @@ spec:
               mountPath: /staging
             - name: tmp
               mountPath: /tmp
+
+        # Discover MinIO's derived OIDC Role ARN and write it into the
+        # minio-sts ConfigMap, so the engine's STS init-container can read a
+        # real ARN instead of the shipped placeholder (WS2-R, gap #1). MinIO
+        # runs in role-policy mode: it logs `RoleArn: arn:minio:iam:::role/<hash>`
+        # at startup. We poll the log (the ARN is stable across restarts — it is
+        # a hash of the OIDC config) and patch the ConfigMap by merge. Runs in
+        # parallel with `upload`; both only need MinIO to be up. Uses the same
+        # alpine/kubectl image + in-cluster auth pattern as the SPIRE
+        # registration Job.
+        - name: populate-sts-arn
+          image: docker.io/alpine/kubectl@sha256:e5e66d693f2c01b3962e959f4a58cdc0dbc28231dc134177d0d78dc91d742c56
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              KUBECTL="kubectl --server=https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS} \
+                       --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+                       --token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              echo "waiting for MinIO to log its OIDC RoleArn (role-policy mode)..."
+              ARN=""
+              for i in $(seq 1 60); do
+                ARN="$($KUBECTL -n aegis-core logs deploy/minio 2>/dev/null \
+                       | grep -oiE 'arn:minio:iam:::role/[A-Za-z0-9_-]+' | head -n1 || true)"
+                [ -n "$ARN" ] && break
+                sleep 5
+              done
+              [ -n "$ARN" ] || { echo "ERROR: MinIO RoleArn not found in logs after ~5min" >&2; exit 1; }
+              echo "discovered RoleArn: $ARN"
+              $KUBECTL -n aegis-core patch configmap minio-sts --type merge \
+                -p "{\"data\":{\"role_arn\":\"$ARN\"}}"
+              echo "minio-sts ConfigMap populated."
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
       volumes:
         - name: staging
           emptyDir: {}

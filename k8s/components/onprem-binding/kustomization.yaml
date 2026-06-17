@@ -32,9 +32,11 @@ resources:
   # --- MinIO (object store) ---
   - minio/secret.yaml
   - minio/deployment.yaml
+  - minio/pvc.yaml
   - minio/service.yaml
   - minio/networkpolicy.yaml
   - minio/bootstrap-job.yaml
+  - minio/bootstrap-rbac.yaml
   # --- SPIRE (identity) ---
   - spire/namespace.yaml
   - spire/spire-bundle-configmap.yaml
@@ -144,6 +146,17 @@ patches:
             args:
               - |
                 set -eu
+                # Read the MinIO STS Role ARN from the minio-sts ConfigMap mounted
+                # as a FILE (WS2-R gap #1). The ConfigMap ships a placeholder; the
+                # minio-bootstrap Job patches in the real ARN. A mounted ConfigMap
+                # file updates in place, so we poll until the placeholder is gone —
+                # the engine self-heals without a restart or manual ordering.
+                echo "waiting for minio-sts role_arn to be populated..."
+                until ROLE_ARN="$(cat /etc/minio-sts/role_arn 2>/dev/null)"; \
+                      [ -n "$ROLE_ARN" ] && [ "${ROLE_ARN#*REPLACE_WITH}" = "$ROLE_ARN" ]; do
+                  sleep 3
+                done
+                echo "role_arn ready"
                 JWT="$(cat /run/spire/svid/jwt_svid.token)"
                 RESP="$(curl -sS -X POST "http://minio:9000/?Action=AssumeRoleWithWebIdentity&Version=2011-06-15&WebIdentityToken=${JWT}&RoleArn=${ROLE_ARN}&DurationSeconds=900")"
                 FLAT="$(echo "$RESP" | tr -d '\n')"
@@ -161,12 +174,6 @@ patches:
                 {"version":"10","aliases":{"obj":{"url":"http://minio:9000","accessKey":"$AK","secretKey":"$SK","sessionToken":"$ST","api":"s3v4","path":"auto"}}}
                 EOF
                 echo "STS exchange OK; scoped temporary credentials issued"
-            env:
-              - name: ROLE_ARN
-                valueFrom:
-                  configMapKeyRef:
-                    name: minio-sts
-                    key: role_arn
             securityContext:
               runAsNonRoot: true
               runAsUser: 65532
@@ -188,6 +195,9 @@ patches:
                 readOnly: true
               - name: tmp
                 mountPath: /tmp
+              - name: minio-sts
+                mountPath: /etc/minio-sts
+                readOnly: true
 
           # --- step 3: model mirror (mc) ---
           # mc reads the session-token alias config sts-exchange wrote to the
@@ -253,6 +263,12 @@ patches:
           name: spiffe-helper-config
           configMap:
             name: spiffe-helper-config
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: minio-sts
+          configMap:
+            name: minio-sts
 
   # =========================================================================
   # Seed Job: same three-step SPIRE init-container sequence.
@@ -301,6 +317,17 @@ patches:
             args:
               - |
                 set -eu
+                # Read the MinIO STS Role ARN from the minio-sts ConfigMap mounted
+                # as a FILE (WS2-R gap #1). The ConfigMap ships a placeholder; the
+                # minio-bootstrap Job patches in the real ARN. A mounted ConfigMap
+                # file updates in place, so we poll until the placeholder is gone —
+                # the engine self-heals without a restart or manual ordering.
+                echo "waiting for minio-sts role_arn to be populated..."
+                until ROLE_ARN="$(cat /etc/minio-sts/role_arn 2>/dev/null)"; \
+                      [ -n "$ROLE_ARN" ] && [ "${ROLE_ARN#*REPLACE_WITH}" = "$ROLE_ARN" ]; do
+                  sleep 3
+                done
+                echo "role_arn ready"
                 JWT="$(cat /run/spire/svid/jwt_svid.token)"
                 RESP="$(curl -sS -X POST "http://minio:9000/?Action=AssumeRoleWithWebIdentity&Version=2011-06-15&WebIdentityToken=${JWT}&RoleArn=${ROLE_ARN}&DurationSeconds=900")"
                 FLAT="$(echo "$RESP" | tr -d '\n')"
@@ -315,12 +342,6 @@ patches:
                 {"version":"10","aliases":{"obj":{"url":"http://minio:9000","accessKey":"$AK","secretKey":"$SK","sessionToken":"$ST","api":"s3v4","path":"auto"}}}
                 EOF
                 echo "STS exchange OK; scoped temporary credentials issued"
-            env:
-              - name: ROLE_ARN
-                valueFrom:
-                  configMapKeyRef:
-                    name: minio-sts
-                    key: role_arn
             securityContext:
               runAsNonRoot: true
               runAsUser: 65532
@@ -342,6 +363,9 @@ patches:
                 readOnly: true
               - name: tmp
                 mountPath: /tmp
+              - name: minio-sts
+                mountPath: /etc/minio-sts
+                readOnly: true
           - name: model-fetch
             image: quay.io/minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3
             command: ["/bin/sh", "-c"]
@@ -394,6 +418,12 @@ patches:
           name: spiffe-helper-config
           configMap:
             name: spiffe-helper-config
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: minio-sts
+          configMap:
+            name: minio-sts
 
   # =========================================================================
   # Engine NetworkPolicy: allow egress to MinIO :9000

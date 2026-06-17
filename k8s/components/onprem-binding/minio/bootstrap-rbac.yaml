@@ -1,0 +1,72 @@
+# RBAC for the minio-bootstrap Job's `populate-sts-arn` step (WS2-R, gap #1).
+#
+# MinIO runs in role-policy mode and derives its OIDC Role ARN at startup — a
+# hash of the OIDC config, not predictable, not settable. WS2 shipped the
+# `minio-sts` ConfigMap with a REPLACE_WITH placeholder and required an operator
+# to discover the ARN (`kubectl logs deploy/minio | grep rolearn`) and patch it
+# by hand. That manual step is exactly what makes a fork un-runnable, so the
+# bootstrap Job now discovers and writes the ARN itself — which needs a
+# ServiceAccount that can read MinIO's logs and patch the one ConfigMap.
+#
+# Least privilege: read-only on the MinIO Deployment + its Pod logs, and
+# get/patch on ConfigMaps scoped by name to `minio-sts` only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: minio-bootstrap
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: minio-bootstrap
+    app.kubernetes.io/part-of: aegis-core
+    app.kubernetes.io/managed-by: argocd
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: minio-bootstrap
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: minio-bootstrap
+    app.kubernetes.io/part-of: aegis-core
+    app.kubernetes.io/managed-by: argocd
+rules:
+  # `kubectl logs deploy/minio` resolves the Deployment -> its Pods -> a Pod log.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Read the current ConfigMap and patch the discovered ARN into it. Scoped to
+  # the single `minio-sts` ConfigMap by name (get/list are namespace-wide
+  # because `list` cannot be name-restricted, but patch is the privileged verb
+  # and it is name-scoped).
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["minio-sts"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: minio-bootstrap
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: minio-bootstrap
+    app.kubernetes.io/part-of: aegis-core
+    app.kubernetes.io/managed-by: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: minio-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: minio-bootstrap
+    namespace: aegis-core
