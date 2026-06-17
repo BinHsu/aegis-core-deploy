@@ -192,13 +192,32 @@ fetches both close together.
 **`no matches for kind "Rollout"` / `"ClusterPolicy"`** — step 4 (Argo Rollouts /
 Kyverno) didn't complete before apply. Re-run it, then re-apply.
 
+**PVCs stuck `Pending` / `ProvisioningFailed` on Talos** — two Talos-specific
+local-path gotchas (handled by `quickstart.sh` step 3; do them by hand if you
+deploy local-path yourself). Verified live on Talos v1.13.3 (WS2-R Phase 2):
+1. local-path provisions each PVC via a short-lived **helper pod that mounts a
+   hostPath**. Talos's default PSA (`baseline`) rejects hostPath, so every helper
+   pod is `forbidden` and the PVC never binds. Fix: `kubectl label ns
+   local-path-storage pod-security.kubernetes.io/enforce=privileged --overwrite`.
+2. Talos's root fs is read-only; local-path's default `/opt/local-path-provisioner`
+   is not writable. Point `cm/local-path-config`'s `nodePathMap` path at
+   `/var/local-path-provisioner`, restart the provisioner; PVCs bind within a
+   retry cycle.
+
 <a id="ram--disk-wall"></a>**RAM / disk wall (the full stack won't co-reside)** —
 on a tight host the controllers + SPIRE + MinIO + engine may not all fit, and a
-small node's ephemeral storage can hit `DiskPressure` while the engine extracts
-its image (this is the ADR-16/17 substrate wall documented during WS2). Options:
-raise `NODE_MEMORY_MB`, free host RAM, or verify the substitutes one at a time on
-a fresh node (bring up SPIRE+MinIO, prove the STS chain, then the engine
-separately) — the slice-verify fallback WS2 used.
+small node's ephemeral storage hits `DiskPressure` while the engine image is
+pulled/extracted — this is the ADR-16/17 substrate wall. **Observed live (WS2-R
+Phase 2, apple/container, 4 GB node / ~1.45 GB allocatable ephemeral storage):**
+SPIRE + MinIO + the model-seed all came up and the `minio-bootstrap` Job
+completed (model seeded, `minio-sts` ARN auto-populated), but pulling the engine
+image drove the node to `DiskPressure=True`, which evicted the `spire-agent`
+DaemonSet pod (`Pod was rejected: node had condition [DiskPressure]`) — so the
+engine/seed init chain (which needs the agent's Workload API socket) could not
+complete. Options: raise `NODE_MEMORY_MB` **and** give the node more disk, free
+host resources, or verify the substitutes one at a time on a fresh node (bring up
+SPIRE + MinIO, prove the auto-ARN + STS chain, then the engine separately) — the
+slice-verify fallback WS2 used.
 
 **Teardown:** `talosctl cluster destroy --provisioner docker --name aegis-ws2r`
 (or `kind delete cluster --name aegis-ws2r` / `k3d cluster delete aegis-ws2r`).

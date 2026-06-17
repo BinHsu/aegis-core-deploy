@@ -64,8 +64,18 @@ kubectl wait --for=condition=Ready nodes --all --timeout=180s
 # --- 3. storage: local-path-provisioner as the default StorageClass ----------
 # Talos ships no default StorageClass; the SPIRE datastore + MinIO PVCs (WS2-R
 # gap #4) need one. (kind/k3d already have a default — skip this step there.)
+# Two Talos-specific fixes are required (found live, WS2-R Phase 2):
+#   (a) local-path's per-PVC "helper pod" mounts a hostPath, which Talos's
+#       default PSA (baseline) rejects — label the provisioner namespace
+#       `privileged` or every PVC stays Pending with ProvisioningFailed.
+#   (b) Talos's root fs is read-only; the default path /opt/local-path-provisioner
+#       is not writable. Point it at /var (Talos's writable mount).
 log "3/7 local-path-provisioner ($LOCAL_PATH_VERSION) as default StorageClass"
 kubectl apply -f "https://raw.githubusercontent.com/rancher/local-path-provisioner/${LOCAL_PATH_VERSION}/deploy/local-path-storage.yaml"
+kubectl label ns local-path-storage pod-security.kubernetes.io/enforce=privileged --overwrite
+kubectl -n local-path-storage patch cm local-path-config --type merge \
+  -p '{"data":{"config.json":"{\n\"nodePathMap\":[{\"node\":\"DEFAULT_PATH_FOR_NON_LISTED_NODES\",\"paths\":[\"/var/local-path-provisioner\"]}]\n}"}}'
+kubectl -n local-path-storage rollout restart deploy/local-path-provisioner
 kubectl -n local-path-storage rollout status deploy/local-path-provisioner --timeout=120s
 kubectl patch storageclass local-path \
   -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
