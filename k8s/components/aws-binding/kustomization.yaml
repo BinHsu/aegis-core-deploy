@@ -8,20 +8,20 @@ kind: Component
 #
 # What lives here and why it is AWS-specific:
 #   - gateway-ingress.yaml        ALB Ingress (aws-load-balancer-controller)
-#   - gateway-servicemonitor.yaml kube-prometheus-stack CRD (Prometheus operator)
-#   - engine-servicemonitor.yaml  kube-prometheus-stack CRD
 #   - iam/                         WorkloadIdentity XR -> ACK Role -> AWS IAM (ADR-09)
 #   - engine SA IRSA marker        eks.amazonaws.com/role-arn injection target
 #
+# ServiceMonitors removed (WS3): the platform cluster has no prometheus-operator
+# (no monitoring.coreos.com CRDs). Observability is Grafana-Alloy-native — Alloy
+# scrapes pods via discovery.kubernetes + label relabeling and does NOT consume
+# ServiceMonitors. Keeping them caused ArgoCD sync failures on the staging cluster.
+#
 # DEFERRED (documented per Bin 2026-06-16): the on-prem substitutes for the
-# identity axis (IRSA -> SPIFFE/SPIRE or sealed-secret), metrics collection
-# (ServiceMonitor -> Alloy/OTel), and L7 (ALB -> Gateway API) are WS2/WS0
-# scope, not WS1. WS1 only proves the contract is target-swappable; it does
-# not build the on-prem substitutes.
+# identity axis (IRSA -> SPIFFE/SPIRE or sealed-secret) and L7 (ALB -> Gateway API)
+# are WS2/WS0 scope, not WS1. WS1 only proves the contract is target-swappable; it
+# does not build the on-prem substitutes.
 resources:
   - gateway-ingress.yaml
-  - gateway-servicemonitor.yaml
-  - engine-servicemonitor.yaml
   - model-store-configmap.yaml
   - gateway-oidc-configmap.yaml
   - iam
