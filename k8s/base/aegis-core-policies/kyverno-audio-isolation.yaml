@@ -1,6 +1,6 @@
 ---
-# Kyverno ClusterPolicy — ADR-0005 R6 "no PVC, no hostPath in audio
-# namespace" enforcement point.
+# Kyverno namespaced Policy (ns aegis-core) — ADR-0005 R6 "no PVC, no
+# hostPath in the audio trust boundary" enforcement point.
 #
 # Why this exists:
 #
@@ -13,17 +13,21 @@
 #
 # Trust-boundary scope:
 #
-# ADR-0005 R6 names the canonical audio namespace as the forward-
-# compatible split target. Phase 4c C-1 chose a single `aegis-core`
-# namespace for both gateway + engine because separating now would
-# have added ops cost without payoff — engine is the only workload
-# that touches raw PCM today. This policy therefore scopes to BOTH:
+# A NAMESPACED `Policy` in `aegis-core`, not a cluster-scoped
+# `ClusterPolicy`. The rules only ever matched Pods in the aegis-core
+# audio namespace, so cluster scope was never needed — and a
+# ClusterPolicy shipped from a workload deploy repo forces the shared
+# ArgoCD `aegis-workloads` AppProject to whitelist cluster-wide kyverno
+# policy for EVERY workload (a privilege hole: the `aegis-*` destination
+# allowlist does not constrain cluster-scoped kinds). A namespaced Policy
+# keeps the identical admission rules at least privilege.
 #
-#   - `aegis-core`        — where engine actually runs today
-#   - `aegis-core-audio`  — forward-compatible for the separate-namespace
-#                            refactor when it lands (renamed from
-#                            `aegis-audio` per CLAUDE.md Rule 11 —
-#                            full-repo-name prefix)
+# Phase 4c C-1 runs gateway + engine in one `aegis-core` namespace
+# (engine is the only workload that touches raw PCM today), so this one
+# Policy covers the live blast radius. ADR-0005 R6's forward-compatible
+# `aegis-core-audio` split target gets its OWN sibling Policy in that
+# namespace when it lands — a namespaced Policy cannot reach across
+# namespaces, and that namespace has zero Pods today, so nothing is lost.
 #
 # Gateway is a no-op beneficiary: it never needed a PVC or hostPath
 # (emptyDir + Memory medium per the Rollout template), so the policy
@@ -51,9 +55,10 @@
 # Gatekeeper policies", ldz #96 (platform's Kyverno install +
 # baseline-policy convention).
 apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+kind: Policy
 metadata:
   name: aegis-core-audio-no-persistent-storage
+  namespace: aegis-core
   labels:
     app.kubernetes.io/name: aegis-core-audio-no-persistent-storage
     app.kubernetes.io/part-of: aegis-core
@@ -64,9 +69,8 @@ metadata:
     policies.kyverno.io/severity: high
     policies.kyverno.io/subject: Pod, PersistentVolumeClaim, HostPath
     policies.kyverno.io/description: >-
-      Enforces ADR-0005 R6 by rejecting Pods in the aegis-core /
-      aegis-core-audio namespace that mount a PersistentVolumeClaim or
-      hostPath volume.
+      Enforces ADR-0005 R6 by rejecting Pods in the aegis-core
+      namespace that mount a PersistentVolumeClaim or hostPath volume.
       The intent is to make on-disk audio persistence impossible at the
       platform layer, not just the application layer.
 spec:
@@ -82,9 +86,6 @@ spec:
           - resources:
               kinds:
                 - Pod
-              namespaces:
-                - aegis-core
-                - aegis-core-audio
       validate:
         message: >-
           ADR-0005 R6: pods in the aegis-core audio trust boundary must not
@@ -104,9 +105,6 @@ spec:
           - resources:
               kinds:
                 - Pod
-              namespaces:
-                - aegis-core
-                - aegis-core-audio
       validate:
         message: >-
           ADR-0005 R6: pods in the aegis-core audio trust boundary must not
