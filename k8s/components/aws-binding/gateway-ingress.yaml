@@ -37,6 +37,17 @@ metadata:
     # aegis.binhsu.org/region (injected by the platform ApplicationSet). Each
     # region's external-dns owns only its own record (txtOwnerId = cluster name),
     # so the two coexist. evaluate-target-health gives automatic failover.
+    #
+    # MECHANISM (verified, external-dns 1.21.1): on the AWS provider, latency
+    # routing is selected by the PRESENCE of `aws-region`, not by a separate
+    # routing-policy annotation. There is NO
+    # `external-dns.alpha.kubernetes.io/aws-routing-policy` for AWS (that spelling
+    # is for other providers) — do not add it. `set-identifier` is REQUIRED for
+    # any Route 53 routing policy. Because the record is an ALB alias,
+    # `aws-evaluate-target-health: "true"` makes Route 53 read the ALB's own
+    # target-group health for failover — no standalone Route 53 health-check
+    # resource is needed (the `aws-health-check-id` annotation, for non-alias
+    # endpoint checks, is deliberately unused here).
     external-dns.alpha.kubernetes.io/set-identifier: "local"
     external-dns.alpha.kubernetes.io/aws-region: "local"
     external-dns.alpha.kubernetes.io/aws-evaluate-target-health: "true"
