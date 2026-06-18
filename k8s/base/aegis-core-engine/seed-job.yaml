@@ -123,11 +123,16 @@ spec:
                 secretKeyRef:
                   name: qdrant-credentials
                   key: QDRANT_URL
+                  # optional — same reason as the engine Rollout: a missing
+                  # qdrant-credentials Secret must not block the pod at
+                  # CreateContainerConfigError before the seed binary can run.
+                  optional: true
             - name: QDRANT_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: qdrant-credentials
                   key: QDRANT_API_KEY
+                  optional: true
           securityContext:
             runAsNonRoot: true
             runAsUser: 65532

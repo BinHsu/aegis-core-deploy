@@ -140,11 +140,21 @@ spec:
                 secretKeyRef:
                   name: qdrant-credentials
                   key: QDRANT_URL
+                  # optional so the documented soft-fail above is actually
+                  # reachable. Without it, a missing qdrant-credentials Secret
+                  # (the ldz ExternalSecret never landed in the WS3 platform-only
+                  # bring-up) blocks the POD at CreateContainerConfigError — the
+                  # kubelet resolves secretKeyRef before any container starts, so
+                  # the engine binary's getenv soft-fail never runs. optional:true
+                  # injects nothing when the Secret is absent → QDRANT_URL unset →
+                  # RAG disabled, transcript still flows.
+                  optional: true
             - name: QDRANT_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: qdrant-credentials
                   key: QDRANT_API_KEY
+                  optional: true
           securityContext:
             runAsNonRoot: true
             runAsUser: 65532
