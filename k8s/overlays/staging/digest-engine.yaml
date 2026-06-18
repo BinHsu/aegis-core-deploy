@@ -3,4 +3,4 @@
 # Guard C); see digest-seed.yaml.
 - op: replace
   path: /spec/template/spec/containers/0/image
-  value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  value: aegis-core@sha256:e00e6f989f2cf45536627018392ce723f8767fa321c6ebd1680e03425ddbb59c
