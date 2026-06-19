@@ -6,9 +6,10 @@ kind: Kustomization
 resources:
   - ../../base
 
-# AWS binding (WS1) — re-adds the ALB Ingress, ServiceMonitors, and the
+# AWS binding (WS1) — re-adds the ALB Ingress and the
 # WorkloadIdentity XR that moved off the neutral base. staging/prod are EKS
-# targets; the Talos overlay omits this component.
+# targets; the Talos overlay omits this component. (ServiceMonitors removed
+# in WS3 — the platform is Alloy-native; no prometheus-operator CRD.)
 components:
   - ../../components/aws-binding
 
