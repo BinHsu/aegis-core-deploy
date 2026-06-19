@@ -5,4 +5,4 @@
 # @sha256 SHAPE and (on prod PRs) the move-together rule.
 - op: replace
   path: /spec/template/spec/containers/0/image
-  value: aegis-core@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  value: aegis-core@sha256:5fb0df836dcc3c0c17a980527dd64357168a3955a76747e455799423e88acf35
