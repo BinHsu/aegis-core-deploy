@@ -6,10 +6,11 @@ kind: Kustomization
 resources:
   - ../../base
 
-# AWS binding (WS1) — re-adds the ALB Ingress and the
-# WorkloadIdentity XR that moved off the neutral base. staging/prod are EKS
-# targets; the Talos overlay omits this component. (ServiceMonitors removed
-# in WS3 — the platform is Alloy-native; no prometheus-operator CRD.)
+# AWS binding (WS1) — re-adds the ALB Ingress + the engine model-fetch/Cognito
+# wiring. (ServiceMonitors removed in WS3 — the platform is Alloy-native; no
+# prometheus-operator CRD. ADR-21 §A removed the WorkloadIdentity XR — engine IAM
+# is now EKS Pod Identity owned by the platform Terraform.) staging/prod are EKS
+# targets; the Talos overlay omits this component.
 components:
   - ../../components/aws-binding
 

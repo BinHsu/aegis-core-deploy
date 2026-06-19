@@ -8,8 +8,17 @@ kind: Component
 #
 # What lives here and why it is AWS-specific:
 #   - gateway-ingress.yaml        ALB Ingress (aws-load-balancer-controller)
-#   - iam/                         WorkloadIdentity XR -> ACK Role -> AWS IAM (ADR-09)
-#   - engine SA IRSA marker        eks.amazonaws.com/role-arn injection target
+#
+# ADR-21 §A: the engine's IAM is now EKS Pod Identity, OWNED BY THE PLATFORM
+# TERRAFORM (regional-stack/pod-identity-engine.tf), not composed in-cluster by
+# Crossplane. Two things that used to live here are GONE:
+#   - iam/ (the WorkloadIdentity XR -> upjet Role -> AWS IAM) — the role is now a
+#     Terraform aws_iam_role, so there is no claim to ship.
+#   - the engine SA's eks.amazonaws.com/role-arn IRSA-marker annotation patch —
+#     Pod Identity binds the SA through an EKS-API association (Terraform), so the
+#     SA needs NO role-arn annotation. The engine SA stays bare (base SA).
+# The model-fetch init-container is unchanged: the AWS SDK gets credentials from
+# the Pod Identity agent transparently, exactly as it did from the IRSA webhook.
 #
 # ServiceMonitors removed (WS3): the platform cluster has no prometheus-operator
 # (no monitoring.coreos.com CRDs). Observability is Grafana-Alloy-native — Alloy
@@ -24,7 +33,6 @@ resources:
   - gateway-ingress.yaml
   - model-store-configmap.yaml
   - gateway-oidc-configmap.yaml
-  - iam
 
 # Mirror the base's managed-by label onto these component resources — the
 # base `labels` transformer only reaches base resources, so without this the
@@ -35,26 +43,14 @@ labels:
     includeSelectors: false
 
 patches:
-  # IRSA marker annotation — moved off the neutral base SA. Re-added here so
-  # the platform ApplicationSet can inject eks.amazonaws.com/role-arn on the
-  # EKS targets. The annotations map must exist as the JSON-patch target.
-  #
-  # The engine's IRSA role needs S3 read on the model bucket (s3:GetObject +
-  # s3:ListBucket). That is a MANAGED policy created by Terraform (Phase B) and
-  # attached via the WorkloadIdentity Claim's policyArns, which the platform
-  # injects (the ARN carries the account id and is not committed here — same
-  # posture as the ECR account and ACM cert ARN). See iam/aegis-core-engine-identity.yaml.
-  - target:
-      kind: ServiceAccount
-      name: aegis-core-engine
-    patch: |
-      apiVersion: v1
-      kind: ServiceAccount
-      metadata:
-        name: aegis-core-engine
-        namespace: aegis-core
-        annotations:
-          aegis.binhsu.org/irsa-role-arn: platform-injected
+  # ADR-21 §A: the engine SA IRSA-marker annotation patch
+  # (eks.amazonaws.com/role-arn = platform-injected) is REMOVED. Workload IAM is
+  # EKS Pod Identity (platform Terraform, regional-stack/pod-identity-engine.tf):
+  # the SA↔role binding is an EKS-API association, not an SA annotation, so the
+  # engine SA stays bare. The model-read grant (s3:GetObject + s3:ListBucket) is
+  # an inline policy on the Terraform-owned role — no WorkloadIdentity claim, no
+  # injected policy ARN here. The init-container below is unchanged; the AWS SDK
+  # transparently picks up Pod Identity credentials.
 
   # =========================================================================
   # Engine Rollout: AWS model delivery (WS3 — the AWS twin of onprem-binding's
