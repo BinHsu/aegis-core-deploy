@@ -1,5 +1,9 @@
 # aegis-core-deploy — GitOps source of truth for the aegis-core workload
 
+![Validate](https://github.com/BinHsu/aegis-core-deploy/actions/workflows/validate.yml/badge.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/BinHsu/aegis-core-deploy/badge)](https://scorecard.dev/viewer/?uri=github.com/BinHsu/aegis-core-deploy)
+
 Declarative desired state for [`aegis-core`](https://github.com/BinHsu/aegis-core).
 Kustomize bases, provider-binding components, and digest-pinned image references —
 ArgoCD reconciles the cluster from this repo. No application code, no CI image build:
