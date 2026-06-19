@@ -1,0 +1,25 @@
+# ServiceAccount for the model-populate Job (Phase 4c, ADR-18 AWS twin).
+#
+# Dedicated identity, SEPARATE from the engine SA: the platform Terraform
+# (regional-stack/pod-identity-model-populator.tf) binds an EKS Pod Identity
+# WRITE role (s3:PutObject + s3:ListBucket + s3:GetObject on the model bucket)
+# to THIS SA by name. Keeping it off the engine SA preserves the read/write
+# split — the engine SA stays read-only.
+#
+# Like the engine SA, this carries NO eks.amazonaws.com/role-arn annotation:
+# Pod Identity binds the role through an EKS-API association (Terraform), not an
+# SA annotation, so the SA stays bare (ADR-21 §A). The aws-cli in the Job picks
+# up the Pod Identity credentials from the agent socket transparently.
+#
+# automountServiceAccountToken:false — the Job needs no Kubernetes API access
+# (unlike the onprem minio-bootstrap SA, which patches a ConfigMap and so needs
+# RBAC + its token). Pod Identity uses its own agent socket, not the SA token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aegis-core-model-populator
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: aegis-core-model-populate
+    app.kubernetes.io/part-of: aegis-core
+automountServiceAccountToken: false

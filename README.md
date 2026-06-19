@@ -204,12 +204,13 @@ the external-dns `set-identifier` and `aws-region` from the platform-injected
 `aegis.binhsu.org/region` annotation — so dual-region latency routing is automatic
 with no per-region manifest edits.
 
-> **Workload identity: IRSA today, EKS Pod Identity forward.** The current code uses
-> IRSA (the engine SA annotation + OIDC token projection via the EKS pod-identity
-> webhook). EKS Pod Identity (no SA annotation, `PodIdentityAssociation` on the
-> platform side) is the target state for WS4 — it removes the cross-namespace trust
-> footgun and the Crossplane `WorkloadIdentity` XR. Until that migration lands, IRSA
-> is live and verified (WS3 staging E2E 2026-06-18).
+> **Workload identity: EKS Pod Identity (WS4, 2026-06-19).** The engine runs under
+> EKS Pod Identity (`PodIdentityAssociation` on the platform side — no SA annotation,
+> no OIDC token projection). This replaced the previous IRSA path in WS4 and was
+> validated on dual-region staging (eu-central-1 + eu-west-1): engine S3 model-fetch
+> succeeded via Pod Identity with no IAM orphan at teardown. The Crossplane
+> `WorkloadIdentity` XR is no longer needed for the engine's identity. Staging was
+> torn down to $0 — ephemeral by cost design.
 
 ### The onprem-binding component
 
