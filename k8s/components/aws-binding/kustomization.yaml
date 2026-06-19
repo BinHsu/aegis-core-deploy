@@ -8,6 +8,8 @@ kind: Component
 #
 # What lives here and why it is AWS-specific:
 #   - gateway-ingress.yaml        ALB Ingress (aws-load-balancer-controller)
+#   - model-populate-{job,rbac}   Phase 4c: seed the per-region S3 model bucket
+#                                 on bring-up (AWS twin of onprem minio-bootstrap)
 #
 # ADR-21 §A: the engine's IAM is now EKS Pod Identity, OWNED BY THE PLATFORM
 # TERRAFORM (regional-stack/pod-identity-engine.tf), not composed in-cluster by
@@ -33,6 +35,13 @@ resources:
   - gateway-ingress.yaml
   - model-store-configmap.yaml
   - gateway-oidc-configmap.yaml
+  # Phase 4c (ADR-18 AWS twin): seed the per-region S3 model bucket on bring-up,
+  # so the engine's model-fetch init has something to `aws s3 sync`. PreSync hook
+  # Job + its dedicated WRITE ServiceAccount (the platform Terraform binds a
+  # write-scoped EKS Pod Identity role to that SA). The AWS mirror of
+  # components/onprem-binding's minio-bootstrap Job.
+  - model-populate-rbac.yaml
+  - model-populate-job.yaml
 
 # Mirror the base's managed-by label onto these component resources — the
 # base `labels` transformer only reaches base resources, so without this the
