@@ -5,4 +5,4 @@
 # The overlay replacement splices the platform-injected registry in front.
 - op: replace
   path: /spec/template/spec/containers/0/image
-  value: aegis-core@sha256:5fb0df836dcc3c0c17a980527dd64357168a3955a76747e455799423e88acf35
+  value: aegis-core@sha256:702b5a7c77b1a9c3986fc87cfa6e140d4deece550977b6506801dd7cca297b72
