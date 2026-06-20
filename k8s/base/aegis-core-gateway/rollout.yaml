@@ -4,18 +4,24 @@ metadata:
   name: aegis-core-gateway
   namespace: aegis-core
   annotations:
-    # Standalone-build defaults for the platform-injected annotations.
-    # These live on the BASE resource (not overlay commonAnnotations) because
+    # Standalone-build default for the platform-injected region annotation.
+    # This lives on the BASE resource (not overlay commonAnnotations) because
     # ArgoCD's injection mechanism runs `kustomize edit add annotation <k:v>`
     # WITHOUT --force, which refuses keys already present in the kustomization
     # file ("annotation already in kustomization file. Use --force to
     # override." — caught live 2026-06-12 on aegis-greeter-deploy #6). Placing
-    # the defaults here as literal resource annotations instead means the
-    # overlay kustomization files declare NO value for these keys — so
+    # the default here as a literal resource annotation instead means the
+    # overlay kustomization files declare NO value for this key — so
     # ArgoCD's edit-add-annotation succeeds, and the commonAnnotations
-    # transformer overrides these literals at sync time with the real values
+    # transformer overrides this literal at sync time with the real value
     # injected by the platform ApplicationSet.
-    aegis.binhsu.org/ecr-repository: aegis-core
+    #
+    # The `aegis.binhsu.org/ecr-repository` annotation is GONE for the AWS
+    # overlays (ghcr-graviton pivot): images now resolve from public GHCR with
+    # a STATIC ref carried by the deploy repo itself (no account-id / region in
+    # the URL), so the platform no longer injects a registry. The Talos overlay
+    # keeps its own copy of the annotation locally (overlays/talos), where the
+    # injected value is a LOCAL registry, not ECR.
     aegis.binhsu.org/region: local
   labels:
     app.kubernetes.io/name: aegis-core-gateway
@@ -84,14 +90,15 @@ spec:
           # (ADR-0032, re-decided 2026-05-17). Edit it by hand only
           # when bootstrapping; normal releases bump it automatically.
           #
-          # Neutral default (WS1, ADR-10/14). Neither registry nor version is
-          # carried here: the real image is pinned BY DIGEST in each overlay
-          # (`aegis-core@sha256:<gateway-digest>`, a JSON6902 patch — kustomize's
-          # images: transformer can't reach a Rollout CRD nor distinguish the
-          # gateway/engine images that share the name `aegis-core`), and the
-          # overlay's replacement splices the platform-injected registry in
-          # front. Bare `aegis-core` is the standalone-build default only.
-          image: aegis-core
+          # Static public GHCR ref (ghcr-graviton pivot). The image name is
+          # fully qualified here — no account-id / region, so the platform no
+          # longer injects a registry for the AWS overlays. Each overlay pins
+          # this BY DIGEST via a JSON6902 patch
+          # (`ghcr.io/binhsu/aegis-core-gateway@sha256:<gateway-digest>`) —
+          # kustomize's images: transformer can't reach a Rollout CRD, hence
+          # the JSON6902 patch. The Talos overlay overrides this with its own
+          # local-registry digest patch + image rewrite.
+          image: ghcr.io/binhsu/aegis-core-gateway
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

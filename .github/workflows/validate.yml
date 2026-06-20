@@ -1,20 +1,24 @@
 name: Validate
 
 # Renders the kustomize overlays and enforces the ADR-10/14 release-model
-# contract (migrated from the ADR-12 tag model in WS1):
+# contract (ghcr-graviton pivot: AWS overlays resolve from public GHCR; the
+# Talos overlay keeps the ADR-12 local-registry injection):
 #
 #   A. Digest-presence guard — every rendered image line must be
-#      `aegis-core@sha256:<64-hex>`. Catches a revert of the digest pins or
-#      the replacements wiring (either would render bare `aegis-core` /
-#      `:latest` — a guaranteed ImagePullBackOff).
+#      `<name>@sha256:<64-hex>`. Catches a revert of the digest pins (which
+#      would render an un-pinned ref — a guaranteed ImagePullBackOff).
 #
-#   B. Injection simulation — replays what the platform ApplicationSet does
-#      (inject `aegis.binhsu.org/ecr-repository` + `aegis.binhsu.org/region`
-#      via `kustomize edit add annotation` WITHOUT --force, exactly as ArgoCD
-#      does), then asserts the registry is spliced IN FRONT of the @sha256
-#      digest (delimiter `@`, digest preserved). Using the real kustomize edit
-#      mechanism catches the "annotation already in kustomization file" conflict
-#      class that broke ArgoCD on 2026-06-12.
+#   B. Registry guard —
+#      * AWS overlays (staging/prod): the deploy repo carries the FULL static
+#        public GHCR ref (DEPLOY-OWNS-STATIC-GHCR), so assert the rendered
+#        output directly: gateway -> ghcr.io/binhsu/aegis-core-gateway,
+#        engine + seed -> ghcr.io/binhsu/aegis-core-engine. No injection.
+#      * Talos: replays what the platform ApplicationSet does (inject
+#        `aegis.binhsu.org/ecr-repository` — a LOCAL registry on-prem — via
+#        `kustomize edit add annotation` WITHOUT --force, exactly as ArgoCD),
+#        then asserts the registry splices IN FRONT of the @sha256 digest.
+#        Catches the "annotation already in kustomization file" conflict class
+#        that broke ArgoCD on 2026-06-12.
 #
 #   C. seed==engine guard (ADR-14) — the engine seed Job must carry the SAME
 #      digest as the engine Rollout. Divergence is a bug.
@@ -79,35 +83,62 @@ jobs:
             echo "--- digest-presence: OK ---"
           done
 
-      - name: B. Injection simulation — assert registry splices before @digest
+      - name: B. Registry guard — AWS overlays render static GHCR; talos injection
         run: |
           set -euo pipefail
-          REGION="eu-central-1"
-          TEST_REPO="251774439261.dkr.ecr.${REGION}.amazonaws.com/aegis-core"
-          for overlay in staging prod talos; do
-            echo "=== k8s/overlays/${overlay} (injected) ==="
-            rm -rf /tmp/inject-sim
-            cp -r k8s /tmp/inject-sim
-            ( cd "/tmp/inject-sim/overlays/${overlay}"
-              kustomize edit add annotation \
-                "aegis.binhsu.org/ecr-repository:${TEST_REPO}" \
-                "aegis.binhsu.org/region:${REGION}" )
-            kustomize build "/tmp/inject-sim/overlays/${overlay}" > "rendered-${overlay}-injected.yaml"
-            image_lines="$(grep -E '^\s+image: ' "rendered-${overlay}-injected.yaml")"
+          # ghcr-graviton pivot: the AWS overlays (staging/prod) no longer take a
+          # platform-injected registry. The deploy repo carries the FULL static
+          # public GHCR ref (DEPLOY-OWNS-STATIC-GHCR), so we assert the rendered
+          # output directly — no `kustomize edit add annotation` simulation:
+          #   gateway -> ghcr.io/binhsu/aegis-core-gateway@sha256:<64-hex>
+          #   engine  -> ghcr.io/binhsu/aegis-core-engine@sha256:<64-hex>
+          #   seed    -> ghcr.io/binhsu/aegis-core-engine@sha256:<64-hex>  (ADR-14)
+          GW_REF="ghcr.io/binhsu/aegis-core-gateway"
+          EN_REF="ghcr.io/binhsu/aegis-core-engine"
+          for overlay in staging prod; do
+            echo "=== k8s/overlays/${overlay} (static GHCR) ==="
+            image_lines="$(grep -E '^\s+image: ' "rendered-${overlay}.yaml")"
             echo "${image_lines}"
-            # Only the aegis-core workload images are platform-injected; the
-            # talos onprem-binding's third-party images (MinIO/mc/curl) are NOT
-            # (the replacements target only the aegis-core Rollouts/Job). So
-            # assert: (1) no aegis-core image is left bare/un-injected, and
-            # (2) the registry-spliced form is present. Third-party images,
-            # already digest-pinned (guard A), are ignored here.
-            leaked="$(echo "${image_lines}" | grep -E '^[[:space:]]*image: aegis-core@sha256:' || true)"
+            # No leaked ECR / bare-aegis-core ref must survive the pivot.
+            leaked="$(echo "${image_lines}" | grep -E '^[[:space:]]*image: (aegis-core@sha256:|[0-9]+\.dkr\.ecr\.)' || true)"
             [ -z "${leaked}" ] \
-              || { echo "::error::${overlay}: aegis-core image not injected (still bare aegis-core@sha256 — delimiter/index regression?):"; echo "${leaked}"; exit 1; }
-            echo "${image_lines}" | grep -qE "^[[:space:]]*image: ${TEST_REPO}@sha256:[0-9a-f]{64}\$" \
-              || { echo "::error::${overlay}: no ${TEST_REPO}@sha256:<digest> image — registry splice did not apply."; exit 1; }
-            echo "--- injection: OK ---"
+              || { echo "::error::${overlay}: pre-pivot image ref leaked (bare aegis-core or ECR URL — ghcr-graviton regression?):"; echo "${leaked}"; exit 1; }
+            # Gateway image renders the static GHCR gateway ref.
+            echo "${image_lines}" | grep -qE "^[[:space:]]*image: ${GW_REF}@sha256:[0-9a-f]{64}\$" \
+              || { echo "::error::${overlay}: no ${GW_REF}@sha256:<digest> image — base GHCR ref / digest patch missing."; exit 1; }
+            # Engine + seed both render the static GHCR engine ref (>= 2 lines).
+            en_count="$(echo "${image_lines}" | grep -cE "^[[:space:]]*image: ${EN_REF}@sha256:[0-9a-f]{64}\$" || true)"
+            [ "${en_count}" -ge 2 ] \
+              || { echo "::error::${overlay}: expected engine+seed to both render ${EN_REF}@sha256:<digest> (found ${en_count})."; exit 1; }
+            echo "--- static GHCR: OK ---"
           done
+          # Talos KEEPS the registry-injection mechanism (on-prem LOCAL registry).
+          # Replay what the platform ApplicationSet does: inject
+          # `aegis.binhsu.org/ecr-repository` + `aegis.binhsu.org/region` via
+          # `kustomize edit add annotation` WITHOUT --force (exactly as ArgoCD),
+          # then assert the registry splices IN FRONT of the @sha256 digest.
+          REGION="eu-central-1"
+          TEST_REPO="registry.local:5000/aegis-core"
+          echo "=== k8s/overlays/talos (injected LOCAL registry) ==="
+          rm -rf /tmp/inject-sim
+          cp -r k8s /tmp/inject-sim
+          ( cd "/tmp/inject-sim/overlays/talos"
+            kustomize edit add annotation \
+              "aegis.binhsu.org/ecr-repository:${TEST_REPO}" \
+              "aegis.binhsu.org/region:${REGION}" )
+          kustomize build "/tmp/inject-sim/overlays/talos" > "rendered-talos-injected.yaml"
+          image_lines="$(grep -E '^\s+image: ' "rendered-talos-injected.yaml")"
+          echo "${image_lines}"
+          # Only the aegis-core workload images are injected; the onprem-binding
+          # third-party images (MinIO/mc/curl) are NOT targeted by the
+          # replacements. Assert: (1) no aegis-core image left bare/un-injected,
+          # (2) the registry-spliced form is present.
+          leaked="$(echo "${image_lines}" | grep -E '^[[:space:]]*image: aegis-core@sha256:' || true)"
+          [ -z "${leaked}" ] \
+            || { echo "::error::talos: aegis-core image not injected (still bare aegis-core@sha256 — delimiter/index regression?):"; echo "${leaked}"; exit 1; }
+          echo "${image_lines}" | grep -qE "^[[:space:]]*image: ${TEST_REPO}@sha256:[0-9a-f]{64}\$" \
+            || { echo "::error::talos: no ${TEST_REPO}@sha256:<digest> image — registry splice did not apply."; exit 1; }
+          echo "--- talos injection: OK ---"
 
       - name: C. seed==engine digest guard (ADR-14)
         run: |

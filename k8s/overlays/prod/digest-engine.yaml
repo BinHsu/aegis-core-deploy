@@ -1,5 +1,7 @@
 # Engine digest pin (ADR-10/14). JSON6902 patch FILE, promoted from staging.
-# The seed Job carries the SAME digest (ADR-14, validate.yml Guard C).
+# The seed Job carries the SAME digest (ADR-14, validate.yml Guard C). Full
+# static public GHCR ref (ghcr-graviton pivot).
 - op: replace
   path: /spec/template/spec/containers/0/image
-  value: aegis-core@sha256:e00e6f989f2cf45536627018392ce723f8767fa321c6ebd1680e03425ddbb59c
+  # TODO(ghcr-graviton #build-27872504892): hex below is the OLD amd64 ECR digest — operator REPLACES with the fresh linux/arm64 GHCR digest before prod apply
+  value: ghcr.io/binhsu/aegis-core-engine@sha256:e00e6f989f2cf45536627018392ce723f8767fa321c6ebd1680e03425ddbb59c

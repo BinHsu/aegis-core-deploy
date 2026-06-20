@@ -1,5 +1,7 @@
 # Seed Job digest pin (ADR-14: seed == engine digest). JSON6902 patch FILE —
-# CI sets this to the SAME value as digest-engine.yaml after each push.
+# CI sets this to the SAME value as digest-engine.yaml after each push. Full
+# static public GHCR ref (same `aegis-core-engine` repo+digest as the engine).
 - op: replace
   path: /spec/template/spec/containers/0/image
-  value: aegis-core@sha256:e00e6f989f2cf45536627018392ce723f8767fa321c6ebd1680e03425ddbb59c
+  # TODO(ghcr-graviton #build-27872504892): hex below is the OLD amd64 ECR digest — operator REPLACES with the fresh linux/arm64 GHCR digest before prod apply
+  value: ghcr.io/binhsu/aegis-core-engine@sha256:e00e6f989f2cf45536627018392ce723f8767fa321c6ebd1680e03425ddbb59c

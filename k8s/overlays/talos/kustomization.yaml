@@ -28,14 +28,55 @@ components:
 # The platform injects the target registry as `aegis.binhsu.org/ecr-repository`
 # (here a LOCAL registry, not ECR) via the ArgoCD Application's
 # commonAnnotations; the replacements below splice it in front of the
-# digest-pinned images — the SAME mechanism the staging/prod overlays use,
-# proving the injection contract is target-swappable.
+# digest-pinned images.
+#
+# Talos KEEPS the registry-injection mechanism. The ghcr-graviton pivot removed
+# it ONLY for the AWS overlays (staging/prod now carry a static public GHCR ref
+# and need no injection). On-prem still splices a per-target LOCAL registry at
+# sync time, so the `aegis.binhsu.org/ecr-repository` annotation that the AWS
+# pivot dropped from the base is RE-ADDED here, scoped to this overlay (the
+# annotation patches in the `patches` block below), leaving the replacements
+# source intact. Talos's own bare `aegis-core@sha256:<digest>` image patches
+# OVERRIDE the base's full GHCR refs, so the in-cluster registry splice (and
+# overlays/talos-standalone's `images: aegis-core` rewrite) still resolves the
+# single-repo on-prem model.
+#
+# TODO(ghcr-graviton): talos local-registry path needs follow-up — the WS2
+# digests below are the OLD locally-built amd64 images; once the arm64 GHCR
+# build lands, decide whether on-prem mirrors from GHCR (crane copy, digest
+# preserved) or keeps a separate local build.
 resources:
   - ../../base
   - httproute.yaml
 
 # Lean local footprint: 1 replica each (mirrors staging).
 patches:
+  # Re-add the `aegis.binhsu.org/ecr-repository` annotation, scoped to this
+  # on-prem overlay (the AWS pivot dropped it from the base). The replacements
+  # block below sources from it to splice the platform-injected LOCAL registry
+  # in front of each bare `aegis-core@sha256:<digest>` image. Standalone build
+  # uses the literal `aegis-core` here (overlays/talos-standalone rewrites it).
+  - patch: |-
+      - op: add
+        path: /metadata/annotations/aegis.binhsu.org~1ecr-repository
+        value: aegis-core
+    target:
+      kind: Rollout
+      name: aegis-core-gateway
+  - patch: |-
+      - op: add
+        path: /metadata/annotations/aegis.binhsu.org~1ecr-repository
+        value: aegis-core
+    target:
+      kind: Rollout
+      name: aegis-core-engine
+  - patch: |-
+      - op: add
+        path: /metadata/annotations/aegis.binhsu.org~1ecr-repository
+        value: aegis-core
+    target:
+      kind: Job
+      name: aegis-core-engine-seed
   - patch: |-
       - op: replace
         path: /spec/replicas

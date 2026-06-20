@@ -4,18 +4,22 @@ metadata:
   name: aegis-core-engine
   namespace: aegis-core
   annotations:
-    # Standalone-build defaults for the platform-injected annotations.
-    # These live on the BASE resource (not overlay commonAnnotations) because
+    # Standalone-build default for the platform-injected region annotation.
+    # This lives on the BASE resource (not overlay commonAnnotations) because
     # ArgoCD's injection mechanism runs `kustomize edit add annotation <k:v>`
     # WITHOUT --force, which refuses keys already present in the kustomization
     # file ("annotation already in kustomization file. Use --force to
     # override." — caught live 2026-06-12 on aegis-greeter-deploy #6). Placing
-    # the defaults here as literal resource annotations instead means the
-    # overlay kustomization files declare NO value for these keys — so
+    # the default here as a literal resource annotation instead means the
+    # overlay kustomization files declare NO value for this key — so
     # ArgoCD's edit-add-annotation succeeds, and the commonAnnotations
-    # transformer overrides these literals at sync time with the real values
+    # transformer overrides this literal at sync time with the real value
     # injected by the platform ApplicationSet.
-    aegis.binhsu.org/ecr-repository: aegis-core
+    #
+    # The `aegis.binhsu.org/ecr-repository` annotation is GONE for the AWS
+    # overlays (ghcr-graviton pivot): images now resolve from public GHCR with
+    # a STATIC ref carried by the deploy repo itself. The Talos overlay keeps
+    # its own copy of the annotation locally (local registry, not ECR).
     aegis.binhsu.org/region: local
   labels:
     app.kubernetes.io/name: aegis-core-engine
@@ -80,11 +84,13 @@ spec:
           # release-staging-image.yml after each release build
           # (ADR-0032, re-decided 2026-05-17).
           #
-          # Neutral default (WS1, ADR-10/14). Real image pinned BY DIGEST per
-          # overlay (`aegis-core@sha256:<engine-digest>`, JSON6902 patch);
-          # registry spliced by the overlay replacement. The seed Job rides the
-          # SAME engine digest (ADR-14). Bare `aegis-core` is the standalone default.
-          image: aegis-core
+          # Static public GHCR ref (ghcr-graviton pivot). Fully qualified —
+          # no account-id / region; the platform no longer injects a registry
+          # for the AWS overlays. Pinned BY DIGEST per overlay via a JSON6902
+          # patch (`ghcr.io/binhsu/aegis-core-engine@sha256:<engine-digest>`).
+          # The seed Job rides the SAME engine digest (ADR-14). The Talos
+          # overlay overrides this with its own local-registry digest patch.
+          image: ghcr.io/binhsu/aegis-core-engine
           imagePullPolicy: IfNotPresent
           ports:
             - name: grpc

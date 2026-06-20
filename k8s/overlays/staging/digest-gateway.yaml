@@ -1,8 +1,10 @@
 # Gateway digest pin (ADR-10/14 "build once, promote by digest"). JSON6902
 # patch FILE (not inline) so the aegis-core release CI can mechanically set the
-# value via `yq -i '.[0].value = "aegis-core@sha256:<digest>"'` after each push.
-# Placeholder until the CI bump runs; validate.yml enforces the @sha256 SHAPE.
-# The overlay replacement splices the platform-injected registry in front.
+# value via `yq -i '.[0].value = "ghcr.io/binhsu/aegis-core-gateway@sha256:<digest>"'`
+# after each push. The deploy repo carries the FULL static public GHCR ref
+# (ghcr-graviton pivot) — no platform registry injection. validate.yml enforces
+# the @sha256 SHAPE.
 - op: replace
   path: /spec/template/spec/containers/0/image
-  value: aegis-core@sha256:85fb332c198cd9737429b78422a94c4f4fef07ba1d24cc767b0109bec64a205b
+  # TODO(ghcr-graviton #build-27872504892): hex below is the OLD amd64 ECR digest — operator REPLACES with the fresh linux/arm64 GHCR digest before prod apply
+  value: ghcr.io/binhsu/aegis-core-gateway@sha256:85fb332c198cd9737429b78422a94c4f4fef07ba1d24cc767b0109bec64a205b
