@@ -18,5 +18,15 @@ metadata:
   labels:
     app.kubernetes.io/name: aegis-core-engine
     app.kubernetes.io/part-of: aegis-core
+  annotations:
+    # PreSync wave -1: the ConfigMap must exist BEFORE the model-populate Job
+    # (PreSync wave 0) runs. The Job's `upload` container reads AEGIS_MODEL_BUCKET
+    # from this ConfigMap via configMapKeyRef; a missing ConfigMap causes
+    # CreateContainerConfigError before the pod even starts.
+    # No hook-delete-policy: the ConfigMap must PERSIST after PreSync so the
+    # engine's model-fetch init-container (Sync phase) and the seed Job
+    # (PostSync) can also read the bucket name.
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/sync-wave: "-1"
 data:
   bucket: "REPLACE_WITH_MODEL_BUCKET"
