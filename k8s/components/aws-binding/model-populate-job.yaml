@@ -96,7 +96,7 @@ spec:
               DEST="/staging/${ID}/${SHA}.bin"
               mkdir -p "/staging/${ID}"
               echo "fetching ${URL} -> ${DEST}"
-              curl -fSL --retry 3 --retry-delay 5 -o "${DEST}" "${URL}"
+              curl -fSL --connect-timeout 10 --max-time 600 --retry 3 --retry-delay 5 --retry-all-errors -o "${DEST}" "${URL}"
               echo "${SHA}  ${DEST}" | sha256sum -c -
               echo "fetched + verified ${ID}"
           securityContext:
