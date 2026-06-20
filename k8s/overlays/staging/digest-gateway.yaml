@@ -6,4 +6,4 @@
 # the @sha256 SHAPE.
 - op: replace
   path: /spec/template/spec/containers/0/image
-  value: ghcr.io/binhsu/aegis-core-gateway@sha256:3bb952306089b92cbd97eb6e6148d2b9e0daad4f4e4ebe2138edb97f9a5e2d36
+  value: ghcr.io/binhsu/aegis-core-gateway@sha256:92afbe686a6767ec56f56fb6c0ea81328de6e3f6638ff202f207c9e165369af0
