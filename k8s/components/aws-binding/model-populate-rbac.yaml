@@ -22,4 +22,14 @@ metadata:
   labels:
     app.kubernetes.io/name: aegis-core-model-populate
     app.kubernetes.io/part-of: aegis-core
+  annotations:
+    # PreSync wave -1: the SA must exist BEFORE the populate Job (PreSync wave 0)
+    # runs, or Kubernetes rejects the Job pod with
+    # `serviceaccount "aegis-core-model-populator" not found`.
+    # No hook-delete-policy: the SA must PERSIST after the hook completes because
+    # the platform Terraform (regional-stack/pod-identity-model-populator.tf)
+    # binds the EKS Pod Identity WRITE role to this SA by name, and the engine
+    # populator may be re-used across syncs.
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/sync-wave: "-1"
 automountServiceAccountToken: false
