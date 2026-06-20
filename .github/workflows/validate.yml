@@ -26,6 +26,9 @@ name: Validate
 #   D. Move-together guard (ADR-14, prod, PRs only) — a prod-overlay PR must
 #      change BOTH the gateway and engine digests or NEITHER. A PR bumping one
 #      and leaving the other stale fails. (Atomic multi-image promotion.)
+#      Exemption: add the 'single-image-promotion' label to allow an intentional
+#      single-image hotfix; the moved digest is verified to exist in GHCR (typo
+#      guard); the held digest was already validated on the base branch (ADR-14).
 #
 # Three overlays are validated: staging, prod (EKS, include components/aws-binding)
 # and talos (on-prem, Gateway API). kustomize v5.8.1 is pinned + sha256-verified.
@@ -156,6 +159,8 @@ jobs:
 
       - name: D. Move-together guard — prod gateway+engine digests (ADR-14, PRs)
         if: github.event_name == 'pull_request'
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
         run: |
           set -euo pipefail
           # A prod promotion PR must change BOTH digests or NEITHER. Render the
@@ -187,7 +192,18 @@ jobs:
           [ "${GW_HEAD}" != "${GW_BASE}" ] && gw_changed=true
           [ "${EN_HEAD}" != "${EN_BASE}" ] && en_changed=true
           if [ "${gw_changed}" != "${en_changed}" ]; then
-            echo "::error::prod promotion changed only one image (gateway_changed=${gw_changed}, engine_changed=${en_changed}). ADR-14 requires both digests move together (atomic multi-image promotion)."
+            # Exactly one image changed. Block by default (accidental half-promotion).
+            # Allow ONLY if the PR explicitly declares a single-image promotion AND
+            # the moved digest actually exists in GHCR (catches a typo'd pin). The
+            # held image is already a valid pin — the base ref passed CI. (ADR-14 exemption.)
+            if printf '%s' "${PR_LABELS}" | tr ' ' '\n' | grep -qx "single-image-promotion"; then
+              if [ "${gw_changed}" = true ]; then moved="${GW_HEAD}"; held="${EN_HEAD}"; else moved="${EN_HEAD}"; held="${GW_HEAD}"; fi
+              docker manifest inspect "${moved}" >/dev/null 2>&1 \
+                || { echo "::error::single-image promotion: moved digest ${moved} not found in GHCR (typo'd or unpushed pin?)."; exit 1; }
+              echo "::warning::single-image promotion (label 'single-image-promotion' asserted): moved ${moved}, held ${held}. Allowed per ADR-14 exemption."
+              exit 0
+            fi
+            echo "::error::prod promotion changed only one image (gateway_changed=${gw_changed}, engine_changed=${en_changed}). ADR-14 requires both digests move together. If this is an intentional single-image hotfix, add the 'single-image-promotion' label to the PR."
             exit 1
           fi
           echo "--- move-together: OK (gateway_changed=${gw_changed}, engine_changed=${en_changed}) ---"
