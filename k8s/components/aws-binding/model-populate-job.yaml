@@ -1,0 +1,182 @@
+# Model-populate Job — the AWS twin of components/onprem-binding's
+# minio-bootstrap Job (Phase 4c, ADR-18 AWS side). It seeds the per-region S3
+# model bucket the engine's `model-fetch` init-container reads with
+# `aws s3 sync`. The bucket is created EMPTY by the platform Terraform
+# (regional-stack/model-store.tf); an empty bucket makes model-fetch fail LOUD,
+# so without this Job the engine crashloops on first bring-up. On-prem the
+# minio-bootstrap Job does the same seed against MinIO; this is its AWS mirror.
+#
+# IDENTITY (read/write split). This Job runs as its OWN ServiceAccount
+# (aegis-core-model-populator, see model-populate-rbac.yaml), bound to a
+# WRITE-scoped EKS Pod Identity role by the platform Terraform
+# (regional-stack/pod-identity-model-populator.tf): s3:PutObject + s3:ListBucket
+# + s3:GetObject (the last authorizes HeadObject) on THIS region's model bucket
+# only. The engine SA keeps its READ-ONLY role — a compromised engine cannot
+# rewrite the models it loads. No CI step, no out-of-band AWS creds, no ldz IAM
+# grant: Pod Identity issues the credentials in-cluster, so the Job runs on
+# every bring-up including a cold DR region.
+#
+# ORDERING (PreSync). This is a `PreSync` hook so it runs and COMPLETES before
+# ArgoCD reconciles the engine Rollout (and the engine-seed PostSync Job) — i.e.
+# the bucket is populated before the engine's `model-fetch` init ever runs its
+# `aws s3 sync`. PreSync (not PostSync) because model-fetch is the engine's OWN
+# init-container, not a separate post-deploy step; the model must exist BEFORE
+# the engine pod starts, not after.
+#
+# IDEMPOTENT. `aws s3api head-object` probes the CAS key first; if the object is
+# already present the upload is skipped. Re-running after a sync (or on the next
+# bring-up of a still-populated bucket) is a no-op — same posture as the onprem
+# Job's `mc mirror` skip-if-present.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aegis-core-model-populate
+  namespace: aegis-core
+  labels:
+    app.kubernetes.io/name: aegis-core-model-populate
+    app.kubernetes.io/part-of: aegis-core
+    app.kubernetes.io/component: object-store-seed
+  annotations:
+    # Run + finish BEFORE the engine Rollout/seed sync, so the bucket is
+    # populated before model-fetch's `aws s3 sync` runs.
+    argocd.argoproj.io/hook: PreSync
+    # Clear any prior failed Job before re-creating; remove a successful one to
+    # keep the namespace tidy. A failed Job persists for operator inspection
+    # until the next sync re-creates the hook. Mirrors the engine-seed PostSync
+    # hook's delete policy.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  # Allow retries: the HuggingFace fetch and the S3 upload are both network
+  # operations. Matches the onprem bootstrap Job's backoffLimit.
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aegis-core-model-populate
+        app.kubernetes.io/part-of: aegis-core
+        app.kubernetes.io/component: object-store-seed
+    spec:
+      restartPolicy: OnFailure
+      # The dedicated WRITE identity. Pod Identity injects credentials regardless
+      # of automount, but the bare default token is not needed — keep it off
+      # (least privilege; the aws-cli uses the Pod Identity agent socket, not the
+      # SA token).
+      serviceAccountName: aegis-core-model-populator
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Fetch whisper-tiny-en from its upstream origin and stage it at the CAS
+        # path the engine expects: <id>/<sha256>.bin. The SHA-256 is the
+        # integrity anchor — we fetch from HuggingFace `main` (not a pinned
+        # revision) but verify the exact content hash, so a changed upstream
+        # fails LOUD here instead of at engine preflight. IDENTICAL model id /
+        # sha / url / CAS layout as the onprem fetch-model container — the two
+        # bindings seed the same artifact into different object stores.
+        #
+        # SOURCE OF TRUTH: aegis-core models/manifest.json
+        #   id     = whisper-tiny-en
+        #   sha256 = 921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f
+        #   url    = https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+        - name: fetch-model
+          image: curlimages/curl@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              ID=whisper-tiny-en
+              SHA=921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f
+              URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+              DEST="/staging/${ID}/${SHA}.bin"
+              mkdir -p "/staging/${ID}"
+              echo "fetching ${URL} -> ${DEST}"
+              curl -fSL --retry 3 --retry-delay 5 -o "${DEST}" "${URL}"
+              echo "${SHA}  ${DEST}" | sha256sum -c -
+              echo "fetched + verified ${ID}"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: staging
+              mountPath: /staging
+      containers:
+        # Upload the staged CAS object into the model bucket, idempotently. The
+        # AWS SDK gets WRITE credentials from the Pod Identity agent transparently
+        # (the populator SA's association, Terraform-owned). The bucket name is
+        # injected from the same model-store ConfigMap the engine reads (one
+        # source of truth for the per-region bucket name).
+        - name: upload
+          image: public.ecr.aws/aws-cli/aws-cli@sha256:017ee8e2aa180f47597daa31219991fbea9377645e55f8070aeaadb156573807
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              ID=whisper-tiny-en
+              SHA=921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f
+              KEY="${ID}/${SHA}.bin"
+              SRC="/staging/${KEY}"
+              echo "target s3://${AEGIS_MODEL_BUCKET}/${KEY}"
+              # Idempotency: skip the upload if the CAS object already exists.
+              # head-object exits 0 when present, non-0 (404) when absent; the
+              # `if` swallows the 404 without tripping `set -e`.
+              if aws s3api head-object --bucket "${AEGIS_MODEL_BUCKET}" --key "${KEY}" >/dev/null 2>&1; then
+                echo "already present — skipping upload (idempotent no-op)."
+              else
+                echo "uploading ${SRC} -> s3://${AEGIS_MODEL_BUCKET}/${KEY}"
+                aws s3 cp "${SRC}" "s3://${AEGIS_MODEL_BUCKET}/${KEY}"
+                echo "uploaded."
+              fi
+              echo "bucket contents:"
+              aws s3 ls --recursive "s3://${AEGIS_MODEL_BUCKET}/"
+          env:
+            # aws-cli needs a writable HOME (creds cache) under
+            # readOnlyRootFilesystem — point it at the tmp emptyDir.
+            - name: HOME
+              value: /tmp
+            - name: AEGIS_MODEL_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: aegis-core-model-store
+                  key: bucket
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: staging
+              mountPath: /staging
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: staging
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

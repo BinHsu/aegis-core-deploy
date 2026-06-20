@@ -47,17 +47,16 @@ metadata:
 #
 # Known dependency on model storage layer: `engine seed` loads
 # bge-m3-q4km from the manifest's CAS path (ROADMAP Phase 4c
-# "Engine startup manifest validation + SHA verify"). Until
-# the Phase 4c CI model populator step lands (gated on ldz #85's
-# IAM extension for `s3:HeadObject + s3:PutObject` on the model
-# bucket), `/models` is the same emptyDir placeholder the Rollout
-# carries — the Job will fail at bge-m3 load with `couldn't open
-# file`. That failure is the same documented gap as the Rollout's
-# (`apps/staging/aegis-core-engine/rollout.yaml` §"MODEL STORAGE —
-# BOOTSTRAP PLACEHOLDER"); both pods recover together when the
-# model storage layer arrives. ArgoCD will surface the Job's
-# failed state until then; the operator notice is "model storage
-# pending", not "seed pipeline broken".
+# "Engine startup manifest validation + SHA verify"). On the AWS
+# targets that storage is now seeded on bring-up by the Phase 4c
+# model-populate Job (components/aws-binding/model-populate-job.yaml,
+# a PreSync hook that runs BEFORE this PostSync seed Job), so the
+# engine's model-fetch init finds a non-empty bucket. The populator
+# uses a dedicated WRITE EKS Pod Identity role owned by the platform
+# Terraform — NO ldz #85 IAM grant is needed (Pod Identity issues the
+# credentials in-cluster). The on-prem twin is the minio-bootstrap Job.
+# (The populator currently seeds whisper-tiny-en; bge-m3 joins the same
+# CAS tree when it is pinned + added to the populated set.)
 spec:
   # 24h TTL on completed Jobs (success or final failure). Enough
   # time for the operator to inspect on the morning review without
@@ -159,12 +158,14 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
-        # Same MODEL STORAGE BOOTSTRAP PLACEHOLDER caveat as the
-        # Rollout. emptyDir → seed will fail at bge-m3 load until
-        # the Phase 4c CI populator step lands (ROADMAP Phase 4c
-        # "CI step: populate model storage from manifest", gated on
-        # ldz #85). When that lands, the volume swaps to the real
-        # model PV / S3 mount and the Job starts succeeding.
+        # MODEL STORAGE: emptyDir, populated at runtime by the engine
+        # Rollout's model-fetch init (`aws s3 sync` on AWS, the SPIRE→
+        # MinIO chain on-prem). On the AWS targets the bucket is seeded
+        # on bring-up by the Phase 4c model-populate Job (a PreSync hook,
+        # components/aws-binding/model-populate-job.yaml) using a dedicated
+        # WRITE EKS Pod Identity role owned by the platform Terraform — NO
+        # ldz #85 CI grant. (bge-m3 still needs adding to the populated set
+        # before this seed Job loads it; tiny.en is seeded today.)
         - name: models
           emptyDir: {}
         - name: tmp

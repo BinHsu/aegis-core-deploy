@@ -1,9 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Provider-neutral base (WS1). The `iam/` WorkloadIdentity XR (ACK/Crossplane
-# -> AWS IAM) moved to components/aws-binding — it is the deepest AWS coupling.
-# The on-prem identity substitute (SPIFFE/SPIRE or sealed-secret) is WS2.
+# Provider-neutral base (WS1). The engine's AWS identity is bound by the AWS
+# target overlay, not the base. ADR-21 §A: on EKS that binding is now EKS Pod
+# Identity, owned by the platform Terraform (regional-stack/pod-identity-engine.tf)
+# — the deploy repo ships no IAM claim and no role-arn annotation; the engine SA
+# stays bare. The on-prem identity substitute (SPIFFE/SPIRE or sealed-secret) is WS2.
 resources:
   - aegis-core-gateway
   - aegis-core-engine
