@@ -8,13 +8,14 @@ metadata:
     app.kubernetes.io/part-of: aegis-core
     app.kubernetes.io/component: rag-seed
   annotations:
-    # Standalone-build defaults for the platform-injected annotations.
-    # Mirrors the pattern on the engine Rollout: ArgoCD's commonAnnotations
-    # transformer propagates the injected annotation to ALL resources
-    # including this Job, so the replacements block in the overlays can
-    # source from this Job's own metadata.annotations — same channel as
-    # the Rollout. The base literal here is the standalone-build fallback.
-    aegis.binhsu.org/ecr-repository: aegis-core
+    # Standalone-build default for the platform-injected region annotation.
+    # Mirrors the engine Rollout: ArgoCD's commonAnnotations transformer
+    # propagates the injected annotation to ALL resources including this Job.
+    #
+    # The `aegis.binhsu.org/ecr-repository` annotation is GONE for the AWS
+    # overlays (ghcr-graviton pivot): the seed image is a STATIC public GHCR
+    # ref carried by the deploy repo — the SAME ref+digest as the engine
+    # (ADR-14). The Talos overlay keeps its own copy of the annotation locally.
     aegis.binhsu.org/region: local
     # ArgoCD hook semantics: run AFTER the Rollout (and its Service /
     # NetworkPolicy / ServiceAccount) have reconciled, so the Secret
@@ -94,10 +95,11 @@ spec:
           # rewrites this line and the Rollout's in lockstep after
           # each release build (ADR-0032, re-decided 2026-05-17).
           #
-          # Neutral default (WS1, ADR-10/14). Pinned BY DIGEST per overlay to
-          # the SAME engine digest as the engine Rollout (ADR-14 seed=engine),
-          # via JSON6902 patch; registry spliced by the overlay replacement.
-          image: aegis-core
+          # Static public GHCR ref (ghcr-graviton pivot) — the SAME image as
+          # the engine Rollout (ADR-14 seed=engine). Pinned BY DIGEST per
+          # overlay to the engine's digest via JSON6902 patch
+          # (`ghcr.io/binhsu/aegis-core-engine@sha256:<engine-digest>`).
+          image: ghcr.io/binhsu/aegis-core-engine
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/engine"]
           args:

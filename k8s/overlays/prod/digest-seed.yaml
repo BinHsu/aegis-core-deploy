@@ -1,5 +1,6 @@
 # Seed Job digest pin (ADR-14: seed == engine digest). JSON6902 patch FILE,
-# promoted from staging in lockstep with digest-engine.yaml.
+# promoted from staging in lockstep with digest-engine.yaml. Full static public
+# GHCR ref (same `aegis-core-engine` repo+digest as the engine).
 - op: replace
   path: /spec/template/spec/containers/0/image
-  value: aegis-core@sha256:e00e6f989f2cf45536627018392ce723f8767fa321c6ebd1680e03425ddbb59c
+  value: ghcr.io/binhsu/aegis-core-engine@sha256:fd8f9c297137200976bd78d59e142f6df7182792828cc27b3dfc6aba6f1c88dd

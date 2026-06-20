@@ -14,40 +14,26 @@ resources:
 components:
   - ../../components/aws-binding
 
-# Registry injection (ADR-12) — annotation-driven, not kustomize.images.
+# Image refs (ghcr-graviton pivot) — replaces the ADR-12 ECR annotation+splice.
 #
-# All three image-bearing manifests (gateway Rollout, engine Rollout,
-# engine seed-job) share ONE ECR repository, `aegis-core`, distinguished
-# by tag PREFIX (gateway: `staging-<sha>`, engine + seed:
-# `engine-staging-<sha>`). Those tags stay in the base manifests, where
-# aegis-core CI rewrites them per-manifest (ADR-0032).
+# The three image-bearing manifests now resolve from PUBLIC GHCR, one package
+# per image name (GHCR is one-package-per-name):
+#   gateway -> ghcr.io/binhsu/aegis-core-gateway
+#   engine  -> ghcr.io/binhsu/aegis-core-engine
+#   seed    -> ghcr.io/binhsu/aegis-core-engine  (ADR-14: same image+digest as engine)
 #
-# The platform ApplicationSet injects the full ECR repository URL (NO
-# tag) as `aegis.binhsu.org/ecr-repository: <acct>.dkr.ecr.<region>.amazonaws.com/aegis-core`
-# via kustomize.commonAnnotations at sync time. The `replacements` block
-# below splices that URL as the part of each image field BEFORE the `:`,
-# so the CI-managed tag survives unchanged. Standalone `kustomize build`
-# falls back to the base literal (`aegis-core`) — the short form is
-# valid for local development; ECR resolution only happens in-cluster
-# via the injected full URL.
+# GHCR refs are STATIC — no account-id / region in the URL, unlike ECR. So the
+# platform no longer needs to inject the registry for aegis-core. The chosen
+# mechanism is DEPLOY-OWNS-STATIC-GHCR: the base resources carry the full GHCR
+# ref, and each overlay pins the digest via the JSON6902 patch FILES below.
+# The old platform-injection indirection (the `aegis.binhsu.org/ecr-repository`
+# annotation + the `replacements` that spliced it before the `@` digest
+# delimiter) is REMOVED. Only the region replacement (external-dns latency
+# routing) remains.
 #
-# Why NOT kustomize.images newName: the platform's `spec.source.kustomize.images`
-# newName-only injection was proven to overwrite the tag field on kustomize
-# v5.8.1, rendering `:latest` (ImagePullBackOff trap). Annotations +
-# replacements is the ADR-12 contract: the platform owns the registry URL
-# channel; the deploy repo owns the tag.
-#
-# Standalone-build defaults for `aegis.binhsu.org/ecr-repository` are
-# declared as LITERAL annotations on the base resources (NOT here in
-# commonAnnotations). ArgoCD's injection runs
-# `kustomize edit add annotation <k:v>` WITHOUT --force; that command
-# refuses keys already present in the kustomization file. Keeping this
-# file annotation-free means ArgoCD's edit-add-annotation succeeds, and
-# the commonAnnotations transformer then overrides the base literals with
-# the real injected values at sync time.
-#
-# ⚠️ E2E PENDING platform bootstrap — confirm the injected registry
-# prefix resolves all three images at first sync.
+# Why NOT kustomize.images newName: the workloads are Argo Rollout CRDs +
+# a Job; kustomize's images: transformer doesn't reach a CRD, so the full ref
+# is carried in the base image field and the digest pinned by JSON6902 patch.
 replacements:
   # external-dns latency routing (WS3-R): rewrite the gateway Ingress's
   # set-identifier + aws-region placeholders with the platform-injected region
@@ -64,64 +50,12 @@ replacements:
         fieldPaths:
           - metadata.annotations.[external-dns.alpha.kubernetes.io/set-identifier]
           - metadata.annotations.[external-dns.alpha.kubernetes.io/aws-region]
-  # Gateway Rollout — container name: gateway
-  - source:
-      kind: Rollout
-      name: aegis-core-gateway
-      fieldPath: metadata.annotations.[aegis.binhsu.org/ecr-repository]
-    targets:
-      - select:
-          kind: Rollout
-          name: aegis-core-gateway
-        fieldPaths:
-          - spec.template.spec.containers.[name=gateway].image
-        options:
-          # `@` delimiter (ADR-10/14): registry spliced in front of the
-          # digest-pinned image, preserving the @sha256 digest from the
-          # JSON6902 patches below. (Was `:` in the pre-digest model.)
-          delimiter: "@"
-          index: 0
-  # Engine Rollout — container name: engine
-  - source:
-      kind: Rollout
-      name: aegis-core-engine
-      fieldPath: metadata.annotations.[aegis.binhsu.org/ecr-repository]
-    targets:
-      - select:
-          kind: Rollout
-          name: aegis-core-engine
-        fieldPaths:
-          - spec.template.spec.containers.[name=engine].image
-        options:
-          # `@` delimiter (ADR-10/14): registry spliced in front of the
-          # digest-pinned image, preserving the @sha256 digest from the
-          # JSON6902 patches below. (Was `:` in the pre-digest model.)
-          delimiter: "@"
-          index: 0
-  # Engine seed Job — container name: seed
-  - source:
-      kind: Job
-      name: aegis-core-engine-seed
-      fieldPath: metadata.annotations.[aegis.binhsu.org/ecr-repository]
-    targets:
-      - select:
-          kind: Job
-          name: aegis-core-engine-seed
-        fieldPaths:
-          - spec.template.spec.containers.[name=seed].image
-        options:
-          # `@` delimiter (ADR-10/14): registry spliced in front of the
-          # digest-pinned image, preserving the @sha256 digest from the
-          # JSON6902 patches below. (Was `:` in the pre-digest model.)
-          delimiter: "@"
-          index: 0
 
 # Digest pins (ADR-10/14). Same mechanism + rationale as the staging overlay:
-# per-resource JSON6902 patches (Rollout CRDs sharing the name `aegis-core`),
-# seed Job == engine digest (ADR-14). Prod's digests are PROMOTED from staging
-# by a promotion PR that copies the staging-verified digests here in one commit
-# (ADR-14 atomic promotion). Placeholders until the WS3 ECR pipeline + promotion
-# flow set them — see staging overlay note on the WS3-deferred CI bump.
+# per-resource JSON6902 patches (Rollout CRDs + a Job), each carrying the FULL
+# public GHCR ref (ghcr-graviton pivot); seed Job == engine ref+digest (ADR-14).
+# Prod's digests are PROMOTED from staging by a promotion PR that copies the
+# staging-verified digests here in one commit (ADR-14 atomic promotion).
 patches:
   # Prod hostname (WS3-R). The aws-binding component ships the staging host as
   # default; prod serves on its per-env subdomain aegis-api.prod.aws.binhsu.org.

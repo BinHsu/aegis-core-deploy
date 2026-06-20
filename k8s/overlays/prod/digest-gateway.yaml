@@ -1,8 +1,8 @@
 # Gateway digest pin (ADR-10/14). JSON6902 patch FILE. Prod digests are
 # PROMOTED from staging by a promotion PR that copies the staging-verified
 # digest here (ADR-14 atomic promotion: gateway + engine move together or
-# neither). Placeholder until the first promotion; validate.yml enforces the
-# @sha256 SHAPE and (on prod PRs) the move-together rule.
+# neither). Full static public GHCR ref (ghcr-graviton pivot). validate.yml
+# enforces the @sha256 SHAPE and (on prod PRs) the move-together rule.
 - op: replace
   path: /spec/template/spec/containers/0/image
-  value: aegis-core@sha256:5fb0df836dcc3c0c17a980527dd64357168a3955a76747e455799423e88acf35
+  value: ghcr.io/binhsu/aegis-core-gateway@sha256:3bb952306089b92cbd97eb6e6148d2b9e0daad4f4e4ebe2138edb97f9a5e2d36

@@ -18,11 +18,13 @@ resources:
 components:
   - ../../components/aws-binding
 
-# Registry injection (ADR-12) — identical channel as prod.
-# The platform ApplicationSet injects the full ECR repository URL via
-# `aegis.binhsu.org/ecr-repository` on all three image-bearing resources.
-# Standalone-build defaults are the base literals (`aegis-core`).
-# See overlays/prod/kustomization.yaml for the full rationale.
+# Image refs (ghcr-graviton pivot) — identical channel as prod. The base
+# resources now carry the FULL static public GHCR ref
+# (ghcr.io/binhsu/aegis-core-{gateway,engine}); each digest is pinned by the
+# JSON6902 patch FILES below. GHCR refs are static (no account-id / region), so
+# the platform no longer injects a registry for aegis-core — the old
+# `aegis.binhsu.org/ecr-repository` annotation + image `replacements` splice are
+# REMOVED. Only the region replacement (external-dns latency routing) remains.
 replacements:
   # external-dns latency routing (WS3-R): rewrite the gateway Ingress's
   # set-identifier + aws-region placeholders with the platform-injected region
@@ -39,57 +41,6 @@ replacements:
         fieldPaths:
           - metadata.annotations.[external-dns.alpha.kubernetes.io/set-identifier]
           - metadata.annotations.[external-dns.alpha.kubernetes.io/aws-region]
-  # Gateway Rollout — container name: gateway
-  - source:
-      kind: Rollout
-      name: aegis-core-gateway
-      fieldPath: metadata.annotations.[aegis.binhsu.org/ecr-repository]
-    targets:
-      - select:
-          kind: Rollout
-          name: aegis-core-gateway
-        fieldPaths:
-          - spec.template.spec.containers.[name=gateway].image
-        options:
-          # `@` delimiter (ADR-10/14): splice the platform-injected registry in
-          # front of the digest-pinned image, preserving the @sha256 digest set
-          # by the JSON6902 patches below. (Was `:` in the pre-digest model.)
-          delimiter: "@"
-          index: 0
-  # Engine Rollout — container name: engine
-  - source:
-      kind: Rollout
-      name: aegis-core-engine
-      fieldPath: metadata.annotations.[aegis.binhsu.org/ecr-repository]
-    targets:
-      - select:
-          kind: Rollout
-          name: aegis-core-engine
-        fieldPaths:
-          - spec.template.spec.containers.[name=engine].image
-        options:
-          # `@` delimiter (ADR-10/14): splice the platform-injected registry in
-          # front of the digest-pinned image, preserving the @sha256 digest set
-          # by the JSON6902 patches below. (Was `:` in the pre-digest model.)
-          delimiter: "@"
-          index: 0
-  # Engine seed Job — container name: seed
-  - source:
-      kind: Job
-      name: aegis-core-engine-seed
-      fieldPath: metadata.annotations.[aegis.binhsu.org/ecr-repository]
-    targets:
-      - select:
-          kind: Job
-          name: aegis-core-engine-seed
-        fieldPaths:
-          - spec.template.spec.containers.[name=seed].image
-        options:
-          # `@` delimiter (ADR-10/14): splice the platform-injected registry in
-          # front of the digest-pinned image, preserving the @sha256 digest set
-          # by the JSON6902 patches below. (Was `:` in the pre-digest model.)
-          delimiter: "@"
-          index: 0
 
 # Env-diff lives in the overlay (ADR-12). Staging runs a leaner footprint
 # than prod: 1 replica on each Rollout instead of the base floor of 2.
@@ -97,17 +48,12 @@ replacements:
 # and only config changes between them.
 # Digest pins (ADR-10/14 "build once, promote by digest"). Per-resource
 # JSON6902 patches because the workloads are Argo Rollout CRDs (kustomize's
-# images: transformer doesn't reach a CRD) sharing the image name `aegis-core`
-# (so a name-keyed transformer couldn't give gateway vs engine distinct
-# digests). The seed Job MUST carry the SAME digest as the engine Rollout
-# (ADR-14). The placeholder digests below are overwritten:
-#   - WS1 local Talos proof  -> overlays/talos (real locally-built digests)
-#   - WS3 (DEFERRED)         -> the aegis-core release CI bumps these from ECR
-#                               push digests. The CI's tag->digest rewrite is
-#                               WS3 work (it rides the ECR/OIDC pipeline, which
-#                               decision A defers to WS3); until then these stay
-#                               placeholders and validate.yml only enforces the
-#                               @sha256 SHAPE, not a specific build.
+# images: transformer doesn't reach a CRD). The gateway and engine now resolve
+# to DISTINCT public GHCR repos (aegis-core-gateway vs aegis-core-engine), each
+# with its own digest. The seed Job MUST carry the SAME ref+digest as the engine
+# Rollout (ADR-14). The patch FILES below carry the FULL GHCR ref + digest; the
+# aegis-core release CI bumps them via yq after each GHCR push (ghcr-graviton
+# pivot). validate.yml enforces the @sha256 SHAPE + the GHCR ref.
 patches:
   - patch: |-
       - op: replace
